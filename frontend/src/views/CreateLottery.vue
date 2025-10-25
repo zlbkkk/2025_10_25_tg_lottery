@@ -38,6 +38,9 @@
             type="datetime"
             placeholder="选择开始时间"
             format="YYYY-MM-DD HH:mm:ss"
+            :disabled-date="disabledStartDate"
+            :disabled-hours="disabledStartHours"
+            :disabled-minutes="disabledStartMinutes"
           />
         </el-form-item>
 
@@ -47,6 +50,7 @@
             type="datetime"
             placeholder="选择结束时间"
             format="YYYY-MM-DD HH:mm:ss"
+            :disabled-date="disabledEndDate"
           />
         </el-form-item>
 
@@ -95,9 +99,76 @@ export default {
     }
   },
   methods: {
+    // 禁用开始时间：不能选择今天之前的日期
+    disabledStartDate(date) {
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+      return date.getTime() < today.getTime()
+    },
+    
+    // 禁用开始时间的小时
+    disabledStartHours() {
+      const selectedDate = this.form.start_time ? new Date(this.form.start_time) : null
+      const now = new Date()
+      
+      if (!selectedDate) return []
+      
+      // 如果选择的是今天，禁用当前时间之前的小时
+      if (this.isSameDay(selectedDate, now)) {
+        const currentHour = now.getHours()
+        return Array.from({ length: currentHour }, (_, i) => i)
+      }
+      
+      return []
+    },
+    
+    // 禁用开始时间的分钟
+    disabledStartMinutes(hour) {
+      const selectedDate = this.form.start_time ? new Date(this.form.start_time) : null
+      const now = new Date()
+      
+      if (!selectedDate) return []
+      
+      // 如果选择的是今天且是当前小时，禁用当前分钟之前的分钟
+      if (this.isSameDay(selectedDate, now) && hour === now.getHours()) {
+        const currentMinute = now.getMinutes()
+        return Array.from({ length: currentMinute }, (_, i) => i)
+      }
+      
+      return []
+    },
+    
+    // 禁用结束时间：不能早于开始时间
+    disabledEndDate(date) {
+      if (!this.form.start_time) {
+        // 如果没有选择开始时间，至少不能选今天之前
+        const today = new Date()
+        today.setHours(0, 0, 0, 0)
+        return date.getTime() < today.getTime()
+      }
+      
+      // 不能早于开始时间
+      const startDate = new Date(this.form.start_time)
+      startDate.setHours(0, 0, 0, 0)
+      return date.getTime() < startDate.getTime()
+    },
+    
+    // 判断是否为同一天
+    isSameDay(date1, date2) {
+      return date1.getFullYear() === date2.getFullYear() &&
+             date1.getMonth() === date2.getMonth() &&
+             date1.getDate() === date2.getDate()
+    },
+    
     async submitForm() {
       try {
         await this.$refs.formRef.validate()
+        
+        // 额外验证：确保结束时间晚于开始时间
+        if (new Date(this.form.end_time) <= new Date(this.form.start_time)) {
+          this.$message.error('结束时间必须晚于开始时间')
+          return
+        }
         
         this.submitting = true
         

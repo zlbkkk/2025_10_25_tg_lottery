@@ -13,10 +13,10 @@
 
       <el-table :data="lotteries" style="width: 100%" v-loading="loading">
         <el-table-column prop="id" label="ID" width="80" />
-        <el-table-column prop="title" label="标题" width="200" />
-        <el-table-column prop="prize_name" label="奖品" width="150" />
+        <el-table-column prop="title" label="标题" width="150" />
+        <el-table-column prop="prize_name" label="奖品" width="120" />
         <el-table-column prop="prize_count" label="数量" width="80" />
-        <el-table-column label="参与人数" width="120">
+        <el-table-column label="参与人数" width="110">
           <template #default="scope">
             {{ scope.row.participant_count }}
             <span v-if="scope.row.max_participants > 0">
@@ -31,6 +31,11 @@
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column prop="created_at" label="创建时间" width="180" sortable>
+          <template #default="scope">
+            {{ formatDate(scope.row.created_at) }}
+          </template>
+        </el-table-column>
         <el-table-column prop="start_time" label="开始时间" width="180">
           <template #default="scope">
             {{ formatDate(scope.row.start_time) }}
@@ -41,7 +46,7 @@
             {{ formatDate(scope.row.end_time) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="150">
+        <el-table-column label="操作" width="150" fixed="right">
           <template #default="scope">
             <el-button
               v-if="scope.row.status === 'active'"
@@ -83,7 +88,11 @@ export default {
     async loadLotteries() {
       this.loading = true
       try {
-        this.lotteries = await api.getLotteries()
+        let lotteries = await api.getLotteries()
+        // 按创建时间倒序排列（最新创建的在最前面）
+        this.lotteries = lotteries.sort((a, b) => {
+          return new Date(b.created_at) - new Date(a.created_at)
+        })
       } catch (error) {
         this.$message.error('加载失败')
       } finally {
