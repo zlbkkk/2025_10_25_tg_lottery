@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <title>抽奖管理系统</title>
+    <script>
+      // 屏蔽 ResizeObserver 错误提示
+      window.addEventListener('error', e => {
+        if (e.message === 'ResizeObserver loop completed with undelivered notifications.' || 
+            e.message === 'ResizeObserver loop limit exceeded') {
+          const resizeObserverErrDiv = document.getElementById('webpack-dev-server-client-overlay-div');
+          const resizeObserverErr = document.getElementById('webpack-dev-server-client-overlay');
+          if (resizeObserverErr) {
+            resizeObserverErr.setAttribute('style', 'display: none');
+          }
+          if (resizeObserverErrDiv) {
+            resizeObserverErrDiv.setAttribute('style', 'display: none');
+          }
+          e.stopImmediatePropagation();
+        }
+      });
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
+</html>
