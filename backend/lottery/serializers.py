@@ -2,7 +2,7 @@
 Django REST Framework 序列化器
 """
 from rest_framework import serializers
-from .models import TelegramUser, Lottery, Participation, Winner
+from .models import TelegramUser, Lottery, Prize, Participation, Winner
 
 
 class TelegramUserSerializer(serializers.ModelSerializer):
@@ -13,14 +13,50 @@ class TelegramUserSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at']
 
 
-class WinnerSerializer(serializers.ModelSerializer):
-    """中奖记录序列化器"""
-    user = TelegramUserSerializer(read_only=True)
+class PrizeSerializer(serializers.ModelSerializer):
+    """奖品序列化器"""
+    winner_list_count = serializers.SerializerMethodField()
     
     class Meta:
-        model = Winner
-        fields = ['id', 'user', 'prize_name', 'won_at', 'claimed']
-        read_only_fields = ['id', 'won_at']
+        model = Prize
+        fields = ['id', 'name', 'description', 'image', 'winner_count', 'level', 'winner_list_count', 'created_at']
+        read_only_fields = ['id', 'created_at', 'winner_list_count']
+    
+    def get_winner_list_count(self, obj):
+        """获取该奖品的实际中奖人数"""
+        return obj.winners.count()
+
+
+class LotteryListSerializer(serializers.ModelSerializer):
+    """抽奖列表序列化器（简化版）"""
+    participant_count = serializers.IntegerField(read_only=True)
+    winner_count = serializers.IntegerField(read_only=True)
+    is_active = serializers.BooleanField(read_only=True)
+    can_participate = serializers.BooleanField(read_only=True)
+    prizes = PrizeSerializer(many=True, read_only=True)
+    
+    # 保留旧字段用于向后兼容
+    prize_name = serializers.SerializerMethodField()
+    prize_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Lottery
+        fields = [
+            'id', 'title', 'prize_name', 'prize_count', 'prize_image',
+            'max_participants', 'start_time', 'end_time', 'status',
+            'participant_count', 'winner_count',
+            'is_active', 'can_participate', 'prizes', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+    
+    def get_prize_name(self, obj):
+        """向后兼容：返回第一个奖品名称"""
+        first_prize = obj.prizes.first()
+        return first_prize.name if first_prize else obj.prize_name
+    
+    def get_prize_count(self, obj):
+        """向后兼容：返回总中奖人数"""
+        return sum(p.winner_count for p in obj.prizes.all()) if obj.prizes.exists() else obj.prize_count
 
 
 class ParticipationSerializer(serializers.ModelSerializer):
@@ -33,30 +69,38 @@ class ParticipationSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'participated_at']
 
 
-class LotteryListSerializer(serializers.ModelSerializer):
-    """抽奖列表序列化器（简化版）"""
-    creator = TelegramUserSerializer(read_only=True)
-    participant_count = serializers.IntegerField(read_only=True)
-    winner_count = serializers.IntegerField(read_only=True)
-    is_active = serializers.BooleanField(read_only=True)
-    can_participate = serializers.BooleanField(read_only=True)
+class ParticipationWithLotterySerializer(serializers.ModelSerializer):
+    """参与记录序列化器（包含抽奖信息）"""
+    user = TelegramUserSerializer(read_only=True)
+    lottery = LotteryListSerializer(read_only=True)
     
     class Meta:
-        model = Lottery
-        fields = [
-            'id', 'title', 'prize_name', 'prize_count', 'prize_image',
-            'max_participants', 'start_time', 'end_time', 'status',
-            'creator', 'participant_count', 'winner_count',
-            'is_active', 'can_participate', 'created_at'
-        ]
-        read_only_fields = ['id', 'created_at']
+        model = Participation
+        fields = ['id', 'user', 'lottery', 'participated_at']
+        read_only_fields = ['id', 'participated_at']
+
+
+class WinnerSerializer(serializers.ModelSerializer):
+    """中奖记录序列化器"""
+    user = TelegramUserSerializer(read_only=True)
+    prize = PrizeSerializer(read_only=True)
+    prize_display_name = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Winner
+        fields = ['id', 'user', 'prize', 'prize_name', 'prize_display_name', 'won_at', 'claimed']
+        read_only_fields = ['id', 'won_at']
+    
+    def get_prize_display_name(self, obj):
+        """获取显示用的奖品名称（优先使用Prize，否则使用旧的prize_name）"""
+        return obj.prize.name if obj.prize else obj.prize_name
 
 
 class LotteryDetailSerializer(serializers.ModelSerializer):
     """抽奖详情序列化器（完整版）"""
-    creator = TelegramUserSerializer(read_only=True)
     participations = ParticipationSerializer(many=True, read_only=True)
     winners = WinnerSerializer(many=True, read_only=True)
+    prizes = PrizeSerializer(many=True, read_only=True)
     participant_count = serializers.IntegerField(read_only=True)
     winner_count = serializers.IntegerField(read_only=True)
     is_active = serializers.BooleanField(read_only=True)
@@ -67,7 +111,7 @@ class LotteryDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'description', 'prize_name', 'prize_count', 'prize_image',
             'max_participants', 'start_time', 'end_time', 'status',
-            'creator', 'participations', 'winners',
+            'prizes', 'participations', 'winners',
             'participant_count', 'winner_count',
             'is_active', 'can_participate',
             'created_at', 'updated_at'
@@ -75,24 +119,116 @@ class LotteryDetailSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
 
+class PrizeCreateSerializer(serializers.Serializer):
+    """创建奖品序列化器（用于嵌套在抽奖创建中）"""
+    name = serializers.CharField(max_length=255)
+    description = serializers.CharField(required=False, allow_blank=True)
+    winner_count = serializers.IntegerField(min_value=1)
+    level = serializers.IntegerField(min_value=1, required=False, default=1)
+
+
 class LotteryCreateSerializer(serializers.ModelSerializer):
-    """创建抽奖序列化器"""
+    """创建抽奖序列化器（支持多奖品）"""
+    prize_image = serializers.ImageField(required=False, allow_null=True)
+    prizes = PrizeCreateSerializer(many=True, required=False)  # 新：多奖品
+    
+    # 明确指定时间字段的输入格式
+    start_time = serializers.DateTimeField(
+        input_formats=['%Y-%m-%d %H:%M:%S']
+    )
+    end_time = serializers.DateTimeField(
+        input_formats=['%Y-%m-%d %H:%M:%S']
+    )
+    
     class Meta:
         model = Lottery
         fields = [
             'title', 'description', 'prize_name', 'prize_count', 'prize_image',
-            'max_participants', 'start_time', 'end_time'
+            'max_participants', 'start_time', 'end_time', 'prizes'
         ]
+    
+    def validate_prize_image(self, value):
+        """验证图片字段"""
+        if value == '':
+            return None
+        return value
     
     def validate(self, data):
         """验证数据"""
         if data['start_time'] >= data['end_time']:
             raise serializers.ValidationError("结束时间必须晚于开始时间")
         
-        if data['prize_count'] < 1:
-            raise serializers.ValidationError("奖品数量必须大于0")
+        # 如果提供了prizes，则验证prizes
+        if 'prizes' in data and data['prizes']:
+            if not data['prizes']:
+                raise serializers.ValidationError("至少需要一个奖品")
+        else:
+            # 向后兼容：使用旧的prize_name和prize_count
+            if data.get('prize_count', 0) < 1:
+                raise serializers.ValidationError("奖品数量必须大于0")
         
-        if data['max_participants'] < 0:
+        if data.get('max_participants', 0) < 0:
             raise serializers.ValidationError("最大参与人数不能为负数")
         
         return data
+    
+    def create(self, validated_data):
+        """创建抽奖和奖品"""
+        prizes_data = validated_data.pop('prizes', [])
+        
+        # 调试：打印奖品数据
+        print(f"[DEBUG] Creating lottery with {len(prizes_data)} prizes")
+        for i, prize in enumerate(prizes_data):
+            print(f"[DEBUG] Prize {i+1}: {prize}")
+        
+        # 创建抽奖活动
+        lottery = Lottery.objects.create(**validated_data)
+        
+        # 如果提供了prizes数据，创建多个奖品
+        if prizes_data:
+            for prize_data in prizes_data:
+                created_prize = Prize.objects.create(lottery=lottery, **prize_data)
+                print(f"[DEBUG] Created prize: {created_prize.name} (level: {created_prize.level})")
+        else:
+            # 向后兼容：使用旧字段创建单个奖品
+            Prize.objects.create(
+                lottery=lottery,
+                name=lottery.prize_name,
+                winner_count=lottery.prize_count,
+                level=1
+            )
+        
+        return lottery
+    
+    def update(self, instance, validated_data):
+        """更新抽奖和奖品"""
+        prizes_data = validated_data.pop('prizes', None)
+        
+        # 更新抽奖基本信息
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        
+        # 如果提供了prizes数据，更新奖品
+        if prizes_data is not None:
+            # 删除旧的奖品（如果有中奖记录则不删除，只更新）
+            if not instance.winners.exists():
+                instance.prizes.all().delete()
+                # 创建新的奖品
+                for prize_data in prizes_data:
+                    Prize.objects.create(lottery=instance, **prize_data)
+            else:
+                # 有中奖记录的情况，只更新已有奖品，不删除
+                existing_prizes = list(instance.prizes.all())
+                for i, prize_data in enumerate(prizes_data):
+                    if i < len(existing_prizes):
+                        # 更新已有奖品
+                        prize = existing_prizes[i]
+                        for attr, value in prize_data.items():
+                            setattr(prize, attr, value)
+                        prize.save()
+                    else:
+                        # 新增奖品
+                        Prize.objects.create(lottery=instance, **prize_data)
+        
+        return instance

@@ -4,6 +4,9 @@ Django REST Framework 视图
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.utils import timezone
 from django.db.models import Count
 from .models import TelegramUser, Lottery, Participation, Winner
@@ -13,8 +16,16 @@ from .serializers import (
     LotteryDetailSerializer,
     LotteryCreateSerializer,
     ParticipationSerializer,
+    ParticipationWithLotterySerializer,
     WinnerSerializer
 )
+
+
+class LotteryPagination(PageNumberPagination):
+    """抽奖列表分页器"""
+    page_size = 10  # 每页10条
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
 
 class TelegramUserViewSet(viewsets.ModelViewSet):
@@ -47,30 +58,132 @@ class TelegramUserViewSet(viewsets.ModelViewSet):
 
 class LotteryViewSet(viewsets.ModelViewSet):
     """抽奖视图集"""
-    queryset = Lottery.objects.all().select_related('creator').prefetch_related(
-        'participations__user', 'winners__user'
+    queryset = Lottery.objects.all().select_related('admin_user').prefetch_related(
+        'participations__user', 'winners__user', 'prizes'
     )
+    parser_classes = [JSONParser, MultiPartParser, FormParser]  # 支持 JSON 和文件上传
+    pagination_class = LotteryPagination  # 使用自定义分页器
+    permission_classes = [IsAuthenticated]  # 需要登录
+    
+    def get_queryset(self):
+        """
+        数据隔离：只返回当前登录用户创建的抽奖
+        自定义排序：进行中 > 已结束 > 已作废，每组内按创建时间倒序
+        """
+        from django.db.models import Case, When, IntegerField
+        
+        queryset = super().get_queryset()
+        
+        # 多租户数据隔离：只查询当前用户的数据
+        if self.request.user.is_authenticated:
+            queryset = queryset.filter(admin_user=self.request.user)
+        
+        # 只对列表操作进行自定义排序
+        if self.action == 'list':
+            queryset = queryset.annotate(
+                status_order=Case(
+                    When(status='active', then=1),
+                    When(status='finished', then=2),
+                    When(status='cancelled', then=3),
+                    default=4,
+                    output_field=IntegerField()
+                )
+            ).order_by('status_order', '-created_at')
+        
+        return queryset
     
     def get_serializer_class(self):
         """根据操作返回不同的序列化器"""
         if self.action == 'list':
             return LotteryListSerializer
-        elif self.action == 'create':
+        elif self.action in ['create', 'update', 'partial_update']:
             return LotteryCreateSerializer
         return LotteryDetailSerializer
     
+    def create(self, request, *args, **kwargs):
+        """创建抽奖（处理 FormData 中的 JSON 字符串）"""
+        import json
+        
+        print("[DEBUG] ====== 创建抽奖 ======")
+        print(f"[DEBUG] Content-Type: {request.content_type}")
+        print(f"[DEBUG] 原始 prizes 类型: {type(request.data.get('prizes'))}")
+        
+        # 将 QueryDict 转换为普通字典
+        data = {}
+        for key in request.data:
+            value = request.data[key]
+            data[key] = value
+        
+        if 'prizes' in data and isinstance(data.get('prizes'), str):
+            try:
+                data['prizes'] = json.loads(data['prizes'])
+                print(f"[DEBUG] 解析后 prizes 数量: {len(data['prizes'])}")
+                for i, prize in enumerate(data['prizes']):
+                    print(f"[DEBUG] Prize {i+1}: {prize['name']} (level: {prize['level']})")
+            except json.JSONDecodeError as e:
+                print(f"[DEBUG] JSON解析失败: {e}")
+                return Response(
+                    {'error': '奖品数据格式错误'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        # 使用处理后的数据创建序列化器
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+    
+    def update(self, request, *args, **kwargs):
+        """更新抽奖（处理 FormData 中的 JSON 字符串）"""
+        import json
+        
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        
+        print("[DEBUG] ====== 更新抽奖 ======")
+        
+        # 将 QueryDict 转换为普通字典
+        data = {}
+        for key in request.data:
+            value = request.data[key]
+            data[key] = value
+        
+        if 'prizes' in data and isinstance(data.get('prizes'), str):
+            try:
+                data['prizes'] = json.loads(data['prizes'])
+                print(f"[DEBUG] 解析后 prizes 数量: {len(data['prizes'])}")
+            except json.JSONDecodeError:
+                return Response(
+                    {'error': '奖品数据格式错误'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        # 使用处理后的数据更新序列化器
+        serializer = self.get_serializer(instance, data=data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        
+        if getattr(instance, '_prefetched_objects_cache', None):
+            instance._prefetched_objects_cache = {}
+        
+        return Response(serializer.data)
+    
     def perform_create(self, serializer):
-        """创建抽奖时设置状态为 active"""
-        serializer.save(status='active')
+        """创建抽奖时设置状态为 active，并自动设置管理员为当前用户"""
+        serializer.save(status='active', admin_user=self.request.user)
     
     @action(detail=False, methods=['get'])
     def active(self, request):
-        """获取进行中的抽奖"""
-        now = timezone.now()
+        """获取进行中的抽奖（排除已结束和已作废）"""
+        from datetime import datetime
+        now = datetime.now()
         lotteries = self.queryset.filter(
             status='active',
             start_time__lte=now,
             end_time__gte=now
+        ).exclude(
+            status__in=['finished', 'cancelled']
         )
         serializer = LotteryListSerializer(lotteries, many=True)
         return Response(serializer.data)
@@ -120,7 +233,7 @@ class LotteryViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def draw(self, request, pk=None):
-        """执行开奖"""
+        """手动开奖"""
         lottery = self.get_object()
         
         if lottery.status != 'active':
@@ -129,16 +242,30 @@ class LotteryViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # 执行开奖
-        success = lottery.draw_winners()
+        # 检查是否超过结束时间
+        from datetime import datetime
+        now = datetime.now()
+        end_time = lottery.end_time
         
-        if success:
-            # 获取中奖者
+        # 兼容旧数据：转换aware datetime为naive
+        if timezone.is_aware(end_time):
+            end_time = timezone.make_naive(end_time)
+        
+        if now > end_time:
+            return Response(
+                {'error': '抽奖已结束，无法手动开奖'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 标记为手动开奖并执行
+        lottery.manual_drawn = True
+        lottery.save()
+        
+        if lottery.draw_winners():
             winners = lottery.winners.all()
             serializer = WinnerSerializer(winners, many=True)
-            
             return Response({
-                'message': '开奖成功',
+                'message': '手动开奖成功',
                 'winners': serializer.data
             })
         else:
@@ -147,14 +274,50 @@ class LotteryViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
     
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """作废抽奖"""
+        lottery = self.get_object()
+        
+        if lottery.status == 'finished':
+            return Response(
+                {'error': '已结束的抽奖不能作废'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if lottery.status == 'cancelled':
+            return Response(
+                {'error': '抽奖已经作废'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 设置状态为作废
+        lottery.status = 'cancelled'
+        lottery.save()
+        
+        return Response({
+            'message': '作废成功'
+        })
+    
     @action(detail=False, methods=['get'])
     def statistics(self, request):
-        """统计数据"""
-        total_lotteries = Lottery.objects.count()
-        active_lotteries = Lottery.objects.filter(status='active').count()
-        finished_lotteries = Lottery.objects.filter(status='finished').count()
-        total_participants = Participation.objects.count()
-        total_winners = Winner.objects.count()
+        """
+        统计数据 - 多租户隔离
+        只统计当前登录用户的抽奖数据
+        """
+        # 获取当前用户的抽奖
+        user_lotteries = Lottery.objects.filter(admin_user=request.user)
+        
+        # 统计抽奖数量
+        total_lotteries = user_lotteries.count()
+        active_lotteries = user_lotteries.filter(status='active').count()
+        finished_lotteries = user_lotteries.filter(status='finished').count()
+        
+        # 统计参与人数（基于用户的抽奖）
+        total_participants = Participation.objects.filter(lottery__admin_user=request.user).count()
+        
+        # 统计中奖人数（基于用户的抽奖）
+        total_winners = Winner.objects.filter(lottery__admin_user=request.user).count()
         
         return Response({
             'total_lotteries': total_lotteries,
@@ -172,7 +335,7 @@ class ParticipationViewSet(viewsets.ReadOnlyModelViewSet):
     
     @action(detail=False, methods=['get'])
     def my_participations(self, request):
-        """获取我的参与记录"""
+        """获取我的参与记录（包含抽奖详情）"""
         telegram_id = request.query_params.get('telegram_id')
         if not telegram_id:
             return Response(
@@ -183,7 +346,8 @@ class ParticipationViewSet(viewsets.ReadOnlyModelViewSet):
         try:
             user = TelegramUser.objects.get(telegram_id=telegram_id)
             participations = self.queryset.filter(user=user)
-            serializer = self.get_serializer(participations, many=True)
+            # 使用包含抽奖信息的序列化器
+            serializer = ParticipationWithLotterySerializer(participations, many=True)
             return Response(serializer.data)
         except TelegramUser.DoesNotExist:
             return Response(

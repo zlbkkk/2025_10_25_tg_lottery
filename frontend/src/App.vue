@@ -1,19 +1,42 @@
 <template>
   <div id="app">
     <el-container>
-      <el-header>
+      <el-header v-if="!isLoginPage">
         <div class="header-content">
           <h1 class="logo" @click="goHome">🎉 抽奖管理系统</h1>
-          <el-menu
-            :default-active="activeIndex"
-            mode="horizontal"
-            @select="handleSelect"
-          >
-            <el-menu-item index="/">首页</el-menu-item>
-            <el-menu-item index="/lotteries">抽奖列表</el-menu-item>
-            <el-menu-item index="/create">创建抽奖</el-menu-item>
-            <el-menu-item index="/statistics">数据统计</el-menu-item>
-          </el-menu>
+          <div class="header-right">
+            <el-menu
+              :default-active="activeIndex"
+              mode="horizontal"
+              @select="handleSelect"
+            >
+              <el-menu-item index="/">首页</el-menu-item>
+              <el-menu-item index="/lotteries">抽奖列表</el-menu-item>
+              <el-menu-item index="/create">创建抽奖</el-menu-item>
+              <el-menu-item index="/statistics">数据统计</el-menu-item>
+            </el-menu>
+            
+            <el-dropdown v-if="currentUser" style="margin-left: 20px;">
+              <span class="user-info">
+                <el-icon><User /></el-icon>
+                {{ currentUser.first_name || currentUser.username }}
+                <el-icon class="el-icon--right"><arrow-down /></el-icon>
+              </span>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item disabled>
+                    <div style="font-size: 12px; color: #909399;">
+                      @{{ currentUser.username }}
+                    </div>
+                  </el-dropdown-item>
+                  <el-dropdown-item divided @click="handleLogout">
+                    <el-icon><SwitchButton /></el-icon>
+                    退出登录
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
         </div>
       </el-header>
       <el-main>
@@ -24,26 +47,85 @@
 </template>
 
 <script>
+import { User, ArrowDown, SwitchButton } from '@element-plus/icons-vue'
+import api from './api'
+
 export default {
   name: 'App',
+  components: {
+    User,
+    ArrowDown,
+    SwitchButton
+  },
   data() {
     return {
-      activeIndex: '/'
+      activeIndex: '/',
+      currentUser: null
     }
   },
+  computed: {
+    isLoginPage() {
+      return this.$route.path === '/login'
+    }
+  },
+  mounted() {
+    this.loadCurrentUser()
+  },
   methods: {
+    async loadCurrentUser() {
+      try {
+        this.currentUser = await api.getCurrentUser()
+      } catch (error) {
+        // 未登录，忽略错误
+      }
+    },
+    
     handleSelect(key) {
       this.$router.push(key)
     },
+    
     goHome() {
       this.$router.push('/')
+    },
+    
+    async handleLogout() {
+      try {
+        // 先清除本地状态
+        this.currentUser = null
+        localStorage.removeItem('user')
+        
+        // 调用退出 API
+        await api.logout()
+        
+        this.$message.success('已退出登录')
+        
+        // 跳转到登录页
+        this.$router.push('/login')
+      } catch (error) {
+        console.error('退出登录失败:', error)
+        
+        // 即使 API 调用失败，也清除本地状态并跳转
+        this.currentUser = null
+        localStorage.removeItem('user')
+        this.$router.push('/login')
+      }
     }
   },
   watch: {
-    '$route.path': {
+    '$route': {
       immediate: true,
-      handler(newPath) {
-        this.activeIndex = newPath
+      handler(to, from) {
+        this.activeIndex = to.path
+        
+        // 如果从登录页跳转到其他页面，重新加载用户信息
+        if (from && from.path === '/login' && to.path !== '/login') {
+          this.loadCurrentUser()
+        }
+        
+        // 如果当前不是登录页，且没有用户信息，加载用户信息
+        if (to.path !== '/login' && !this.currentUser) {
+          this.loadCurrentUser()
+        }
       }
     }
   }
@@ -86,6 +168,11 @@ export default {
   padding: 0 40px;
   max-width: 1400px;
   margin: 0 auto;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
 }
 
 .header-content h1 {
@@ -291,5 +378,29 @@ export default {
 
 .el-main > * {
   animation: fadeIn 0.4s ease-out;
+}
+
+/* 用户信息样式 */
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  padding: 8px 12px;
+  border-radius: 4px;
+  background: #f5f5f5;
+  color: #262626;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.3s;
+}
+
+.user-info:hover {
+  background: #e6f7ff;
+  color: #1890ff;
+}
+
+.user-info .el-icon {
+  font-size: 16px;
 }
 </style>

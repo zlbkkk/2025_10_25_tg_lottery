@@ -9,7 +9,7 @@
 
 # Telegram Bot Token
 # 从 @BotFather 获取
-BOT_TOKEN = '8057896490:AAHyuY9GnXIAqWsdwSoRO_SSsE3x4xIVsZ8'
+BOT_TOKEN = '8424133957:AAFvh59KPa70eVTEln1TzgUdeOG73dgv210'
 
 # Backend API URL
 # Bot 调用后端 API 的地址

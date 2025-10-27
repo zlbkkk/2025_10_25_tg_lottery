@@ -119,7 +119,8 @@ TIME_ZONE = 'Asia/Shanghai'
 
 USE_I18N = True
 
-USE_TZ = True
+# 设置为 False：数据库直接存储本地时间（北京时间），不进行UTC转换
+USE_TZ = False
 
 
 # Static files (CSS, JavaScript, Images)
@@ -136,16 +137,36 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 CORS_ALLOW_ALL_ORIGINS = True  # 开发环境允许所有来源
 CORS_ALLOW_CREDENTIALS = True
 
+# CSRF settings - 豁免 API 路径（前后端分离）
+CSRF_TRUSTED_ORIGINS = ['http://localhost:8080', 'http://127.0.0.1:8080']
+CSRF_COOKIE_HTTPONLY = False  # 允许 JavaScript 读取 CSRF token
+CSRF_COOKIE_SAMESITE = 'Lax'
+
+# Session 配置
+SESSION_COOKIE_AGE = 86400 * 7  # 7天
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
+
 # REST Framework settings
 REST_FRAMEWORK = {
-    # 'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    # 'PAGE_SIZE': 10,
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'lottery.authentication.CsrfExemptSessionAuthentication',  # 自定义认证类，不检查 CSRF
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 10,
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
     ],
     'DEFAULT_PARSER_CLASSES': [
         'rest_framework.parsers.JSONParser',
+        'rest_framework.parsers.MultiPartParser',  # 支持文件上传
+        'rest_framework.parsers.FormParser',  # 支持表单数据
     ],
+    # 时区设置：返回本地化时间
+    'DATETIME_FORMAT': '%Y-%m-%d %H:%M:%S',
 }
 
 # Telegram Bot 配置（从统一配置文件读取）

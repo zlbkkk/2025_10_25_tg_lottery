@@ -4,6 +4,7 @@
 from django.db import models
 from django.utils import timezone
 from django.conf import settings
+from django.contrib.auth.models import User
 import random
 import requests
 import logging
@@ -39,14 +40,27 @@ class Lottery(models.Model):
         ('cancelled', '已取消'),
     ]
 
+    # 管理员用户（老板账号）- 用于多租户数据隔离
+    admin_user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='managed_lotteries',
+        verbose_name='管理员',
+        null=True,
+        blank=True,
+        help_text='创建此抽奖的管理员账号'
+    )
+    
+    # Telegram创建者（保留用于兼容）
     creator = models.ForeignKey(
         TelegramUser, 
         on_delete=models.CASCADE, 
         related_name='created_lotteries',
-        verbose_name='创建者',
+        verbose_name='Telegram创建者',
         null=True,
         blank=True
     )
+    
     title = models.CharField(max_length=255, verbose_name='抽奖标题')
     description = models.TextField(blank=True, verbose_name='抽奖说明')
     prize_name = models.CharField(max_length=255, verbose_name='奖品名称')
@@ -74,6 +88,12 @@ class Lottery(models.Model):
         verbose_name='状态'
     )
     
+    manual_drawn = models.BooleanField(
+        default=False,
+        verbose_name='是否手动开奖',
+        help_text='如果手动开奖，则不会自动开奖'
+    )
+    
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
 
@@ -99,10 +119,21 @@ class Lottery(models.Model):
     @property
     def is_active(self):
         """是否进行中"""
-        now = timezone.now()
+        from datetime import datetime
+        now = datetime.now()
+        
+        # 兼容处理：确保时间都是 naive datetime
+        start_time = self.start_time
+        end_time = self.end_time
+        
+        if timezone.is_aware(start_time):
+            start_time = timezone.make_naive(start_time)
+        if timezone.is_aware(end_time):
+            end_time = timezone.make_naive(end_time)
+        
         return (
             self.status == 'active' and 
-            self.start_time <= now <= self.end_time
+            start_time <= now <= end_time
         )
 
     @property
@@ -115,38 +146,140 @@ class Lottery(models.Model):
         return True
 
     def draw_winners(self):
-        """执行开奖"""
+        """
+        执行开奖（支持多奖品）
+        
+        开奖策略：
+        1. 按奖品等级从高到低（level从小到大）依次抽奖
+        2. 每个参与者最多只能中一个奖品
+        3. 高等级奖品优先抽取
+        4. 允许没有参与者的情况（开奖成功但无中奖者）
+        """
         if self.status != 'active':
             return False
         
         # 获取所有参与者
-        participants = list(self.participations.all())
+        all_participants = list(self.participations.all())
         
-        if len(participants) < self.prize_count:
-            # 参与人数少于奖品数量
-            winners = participants
-        else:
-            # 随机抽取中奖者
-            winners = random.sample(participants, self.prize_count)
+        # 获取所有奖品（按等级排序）
+        prizes = list(self.prizes.all().order_by('level', 'id'))
+        
+        if not prizes:
+            logger.warning(f'抽奖 {self.id} 没有设置奖品')
+            return False
+        
+        # 如果没有参与者，直接结束抽奖（状态变为finished，但无中奖记录）
+        if not all_participants:
+            logger.warning(f'抽奖 {self.id} 没有参与者，开奖成功但无中奖者')
+            self.status = 'finished'
+            self.save()
+            return True
         
         # 创建中奖记录
-        winner_users = []
-        for participation in winners:
-            Winner.objects.create(
-                lottery=self,
-                user=participation.user,
-                prize_name=self.prize_name
-            )
-            winner_users.append(participation.user)
+        winner_data = []  # [(user, prize), ...]
+        remaining_participants = all_participants.copy()
+        
+        # 按奖品等级依次抽奖
+        for prize in prizes:
+            if not remaining_participants:
+                logger.info(f'奖品 {prize.name} 抽奖时已无剩余参与者')
+                break
+            
+            # 确定本奖品的中奖人数
+            actual_winner_count = min(prize.winner_count, len(remaining_participants))
+            
+            # 随机抽取中奖者
+            selected_winners = random.sample(remaining_participants, actual_winner_count)
+            
+            # 记录中奖信息并创建Winner记录
+            for participation in selected_winners:
+                Winner.objects.create(
+                    lottery=self,
+                    prize=prize,
+                    user=participation.user,
+                    prize_name=prize.name  # 冗余字段，便于查询
+                )
+                winner_data.append((participation.user, prize))
+                # 从候选池中移除（确保每人只中一次奖）
+                remaining_participants.remove(participation)
+            
+            logger.info(f'奖品 {prize.name} 抽取了 {actual_winner_count} 位中奖者')
         
         # 更新状态
         self.status = 'finished'
         self.save()
         
         # 发送通知给中奖者
-        self._send_winner_notifications(winner_users)
+        if winner_data:
+            self._send_winner_notifications_multi_prize(winner_data)
         
         return True
+    
+    def _send_winner_notifications_multi_prize(self, winner_data):
+        """
+        发送多奖品中奖通知
+        
+        Args:
+            winner_data: [(user, prize), ...] 中奖用户和奖品的列表
+        """
+        bot_token = settings.TELEGRAM_BOT_TOKEN
+        if not bot_token:
+            logger.warning('BOT_TOKEN 未配置，无法发送通知')
+            return
+        
+        for user, prize in winner_data:
+            try:
+                # 构造通知消息（包含奖品等级信息）
+                level_text = self._get_level_text(prize.level)
+                message = (
+                    f"🎉🎉🎉 恭喜您中奖啦！\n\n"
+                    f"📋 抽奖活动：{self.title}\n"
+                    f"🏆 获得奖品：{level_text} {prize.name}\n"
+                )
+                
+                if prize.description:
+                    message += f"📝 奖品说明：{prize.description}\n"
+                
+                message += "\n请联系管理员领取您的奖品！"
+                
+                # 如果有奖品图片，发送图片消息
+                if prize.image:
+                    from django.conf import settings as django_settings
+                    image_url = f"http://localhost:8000{prize.image.url}"
+                    
+                    url = f'https://api.telegram.org/bot{bot_token}/sendPhoto'
+                    data = {
+                        'chat_id': user.telegram_id,
+                        'photo': image_url,
+                        'caption': message,
+                        'parse_mode': 'HTML'
+                    }
+                else:
+                    url = f'https://api.telegram.org/bot{bot_token}/sendMessage'
+                    data = {
+                        'chat_id': user.telegram_id,
+                        'text': message,
+                        'parse_mode': 'HTML'
+                    }
+                
+                response = requests.post(url, json=data, timeout=10)
+                
+                if response.status_code == 200:
+                    logger.info(f'成功发送中奖通知给用户 {user.telegram_id} - 奖品: {prize.name}')
+                else:
+                    logger.error(f'发送通知失败: {response.status_code} - {response.text}')
+                    
+            except Exception as e:
+                logger.error(f'发送通知给用户 {user.telegram_id} 时出错: {str(e)}')
+    
+    def _get_level_text(self, level):
+        """根据等级返回对应的文本"""
+        level_map = {
+            1: '🥇一等奖',
+            2: '🥈二等奖',
+            3: '🥉三等奖',
+        }
+        return level_map.get(level, f'第{level}等奖')
     
     def _send_winner_notifications(self, winner_users):
         """发送中奖通知给用户"""
@@ -166,13 +299,28 @@ class Lottery(models.Model):
                     f"请联系管理员领取奖品！"
                 )
                 
-                # 调用 Telegram Bot API
-                url = f'https://api.telegram.org/bot{bot_token}/sendMessage'
-                data = {
-                    'chat_id': user.telegram_id,
-                    'text': message,
-                    'parse_mode': 'HTML'
-                }
+                # 如果有奖品图片，发送图片消息
+                if self.prize_image:
+                    # 获取图片的完整 URL
+                    from django.conf import settings as django_settings
+                    image_url = f"http://localhost:8000{self.prize_image.url}"
+                    
+                    # 发送图片消息
+                    url = f'https://api.telegram.org/bot{bot_token}/sendPhoto'
+                    data = {
+                        'chat_id': user.telegram_id,
+                        'photo': image_url,
+                        'caption': message,
+                        'parse_mode': 'HTML'
+                    }
+                else:
+                    # 只发送文字消息
+                    url = f'https://api.telegram.org/bot{bot_token}/sendMessage'
+                    data = {
+                        'chat_id': user.telegram_id,
+                        'text': message,
+                        'parse_mode': 'HTML'
+                    }
                 
                 response = requests.post(url, json=data, timeout=10)
                 
@@ -212,6 +360,41 @@ class Participation(models.Model):
         return f"{self.user} 参与 {self.lottery.title}"
 
 
+class Prize(models.Model):
+    """奖品模型"""
+    lottery = models.ForeignKey(
+        Lottery,
+        on_delete=models.CASCADE,
+        related_name='prizes',
+        verbose_name='抽奖活动'
+    )
+    name = models.CharField(max_length=255, verbose_name='奖品名称')
+    description = models.TextField(blank=True, verbose_name='奖品描述')
+    image = models.ImageField(
+        upload_to='prizes/',
+        null=True,
+        blank=True,
+        verbose_name='奖品图片'
+    )
+    winner_count = models.IntegerField(default=1, verbose_name='中奖人数')
+    level = models.IntegerField(default=1, verbose_name='奖品等级', help_text='数字越小等级越高，1=一等奖')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+
+    class Meta:
+        db_table = 'prizes'
+        verbose_name = '奖品'
+        verbose_name_plural = verbose_name
+        ordering = ['level', 'id']
+
+    def __str__(self):
+        return f"{self.lottery.title} - {self.name} (x{self.winner_count})"
+
+    @property
+    def winner_list_count(self):
+        """已中奖人数"""
+        return self.winners.count()
+
+
 class Winner(models.Model):
     """中奖记录模型"""
     lottery = models.ForeignKey(
@@ -220,13 +403,21 @@ class Winner(models.Model):
         related_name='winners',
         verbose_name='抽奖活动'
     )
+    prize = models.ForeignKey(
+        Prize,
+        on_delete=models.CASCADE,
+        related_name='winners',
+        verbose_name='中奖奖品',
+        null=True,  # 兼容旧数据
+        blank=True
+    )
     user = models.ForeignKey(
         TelegramUser, 
         on_delete=models.CASCADE, 
         related_name='won_lotteries',
         verbose_name='中奖用户'
     )
-    prize_name = models.CharField(max_length=255, verbose_name='奖品名称')
+    prize_name = models.CharField(max_length=255, verbose_name='奖品名称')  # 保留用于向后兼容
     won_at = models.DateTimeField(auto_now_add=True, verbose_name='中奖时间')
     claimed = models.BooleanField(default=False, verbose_name='是否已领取')
 
@@ -237,4 +428,5 @@ class Winner(models.Model):
         ordering = ['-won_at']
 
     def __str__(self):
-        return f"{self.user} 中奖 {self.prize_name}"
+        prize_display = self.prize.name if self.prize else self.prize_name
+        return f"{self.user} 中奖 {prize_display}"
