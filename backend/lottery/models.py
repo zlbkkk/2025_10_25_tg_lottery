@@ -12,6 +12,153 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+class BotConfig(models.Model):
+    """Bot配置模型 - 每个租户配置自己的Bot Token"""
+    admin_user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='bot_config',
+        verbose_name='管理员',
+        primary_key=True
+    )
+    bot_token = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        verbose_name='Bot Token',
+        help_text='Telegram Bot Token (从 @BotFather 获取)'
+    )
+    bot_username = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        verbose_name='Bot 用户名',
+        help_text='Bot的用户名 (例如: @MyLotteryBot)'
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name='是否启用',
+        help_text='关闭后该Bot将停止工作'
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        db_table = 'bot_configs'
+        verbose_name = 'Bot配置'
+        verbose_name_plural = verbose_name
+
+    def __str__(self):
+        return f"{self.admin_user.username}'s Bot ({self.bot_username or 'Not configured'})"
+
+
+class LoginRecord(models.Model):
+    """登录记录模型 - 记录用户登录和退出信息"""
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='login_records',
+        verbose_name='用户'
+    )
+    ip_address = models.GenericIPAddressField(
+        verbose_name='IP地址',
+        null=True,
+        blank=True
+    )
+    user_agent = models.TextField(
+        verbose_name='用户代理',
+        help_text='浏览器和设备信息',
+        null=True,
+        blank=True
+    )
+    device_type = models.CharField(
+        max_length=50,
+        verbose_name='设备类型',
+        help_text='例如：Windows, Mac, Mobile',
+        null=True,
+        blank=True
+    )
+    browser = models.CharField(
+        max_length=100,
+        verbose_name='浏览器',
+        help_text='例如：Chrome, Firefox, Safari',
+        null=True,
+        blank=True
+    )
+    login_time = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name='登录时间'
+    )
+    logout_time = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name='退出时间'
+    )
+    session_key = models.CharField(
+        max_length=255,
+        verbose_name='会话密钥',
+        help_text='用于关联会话',
+        null=True,
+        blank=True,
+        db_index=True
+    )
+    last_activity = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name='最后活动时间',
+        help_text='用户最后一次活动的时间'
+    )
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name='会话是否活跃'
+    )
+
+    class Meta:
+        db_table = 'login_records'
+        verbose_name = '登录记录'
+        verbose_name_plural = verbose_name
+        ordering = ['-login_time']
+        indexes = [
+            models.Index(fields=['-login_time']),
+            models.Index(fields=['user', '-login_time']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} - {self.ip_address} - {self.login_time.strftime('%Y-%m-%d %H:%M:%S')}"
+    
+    @property
+    def session_duration(self):
+        """计算会话时长"""
+        if self.logout_time:
+            duration = self.logout_time - self.login_time
+            return int(duration.total_seconds())
+        return None
+    
+    @property
+    def is_truly_active(self):
+        """
+        智能判断是否真正在线
+        如果超过30分钟没有活动，视为离线
+        """
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        if not self.is_active:
+            return False
+        
+        if self.logout_time:
+            return False
+        
+        # 如果有最后活动时间，检查是否超时
+        if self.last_activity:
+            timeout = timedelta(minutes=30)  # 30分钟超时
+            return timezone.now() - self.last_activity < timeout
+        
+        # 如果没有最后活动时间，使用登录时间判断
+        timeout = timedelta(minutes=30)
+        return timezone.now() - self.login_time < timeout
+
+
 class TelegramUser(models.Model):
     """Telegram 用户模型"""
     telegram_id = models.BigIntegerField(unique=True, verbose_name='Telegram ID')

@@ -78,11 +78,36 @@
                       placeholder="选择等级" 
                       style="width: 100%;"
                     >
-                      <el-option key="level-1" label="🥇 一等奖" :value="1" />
-                      <el-option key="level-2" label="🥈 二等奖" :value="2" />
-                      <el-option key="level-3" label="🥉 三等奖" :value="3" />
-                      <el-option key="level-4" label="4️⃣ 四等奖" :value="4" />
-                      <el-option key="level-5" label="5️⃣ 五等奖" :value="5" />
+                      <el-option 
+                        key="level-1" 
+                        :label="isLevelUsed(1, index) ? '🥇 一等奖 (已使用)' : '🥇 一等奖'"
+                        :value="1" 
+                        :disabled="isLevelUsed(1, index)"
+                      />
+                      <el-option 
+                        key="level-2" 
+                        :label="isLevelUsed(2, index) ? '🥈 二等奖 (已使用)' : '🥈 二等奖'"
+                        :value="2" 
+                        :disabled="isLevelUsed(2, index)"
+                      />
+                      <el-option 
+                        key="level-3" 
+                        :label="isLevelUsed(3, index) ? '🥉 三等奖 (已使用)' : '🥉 三等奖'"
+                        :value="3" 
+                        :disabled="isLevelUsed(3, index)"
+                      />
+                      <el-option 
+                        key="level-4" 
+                        :label="isLevelUsed(4, index) ? '4️⃣ 四等奖 (已使用)' : '4️⃣ 四等奖'"
+                        :value="4" 
+                        :disabled="isLevelUsed(4, index)"
+                      />
+                      <el-option 
+                        key="level-5" 
+                        :label="isLevelUsed(5, index) ? '5️⃣ 五等奖 (已使用)' : '5️⃣ 五等奖'"
+                        :value="5" 
+                        :disabled="isLevelUsed(5, index)"
+                      />
                     </el-select>
                   </el-form-item>
                 </el-col>
@@ -105,10 +130,11 @@
             type="primary" 
             plain 
             @click="addPrize"
+            :disabled="form.prizes.length >= 5"
             style="width: 100%; margin-top: 10px;"
           >
             <el-icon><Plus /></el-icon>
-            添加更多奖品
+            {{ form.prizes.length >= 5 ? '已达到最多5个等级' : '添加更多奖品' }}
           </el-button>
         </div>
 
@@ -259,14 +285,30 @@ export default {
       return map[level] || `第${level}等奖`
     },
     
+    // 检查某个等级是否已被使用（排除当前奖品）
+    isLevelUsed(level, currentIndex) {
+      return this.form.prizes.some((prize, index) => {
+        // 排除当前正在编辑的奖品
+        return index !== currentIndex && prize.level === level
+      })
+    },
+    
     // 添加奖品
     addPrize() {
-      const nextLevel = this.form.prizes.length + 1
+      // 查找第一个未使用的等级
+      let nextLevel = 1
+      for (let i = 1; i <= 5; i++) {
+        if (!this.form.prizes.some(prize => prize.level === i)) {
+          nextLevel = i
+          break
+        }
+      }
+      
       this.form.prizes.push({
         name: '',
         description: '',
         winner_count: 1,
-        level: nextLevel <= 5 ? nextLevel : 5
+        level: nextLevel
       })
     },
     
@@ -480,6 +522,14 @@ export default {
         // 验证奖品信息
         if (!this.form.prizes || this.form.prizes.length === 0) {
           this.$message.error('至少需要设置一个奖品')
+          return
+        }
+        
+        // 检查等级是否有重复
+        const levels = this.form.prizes.map(p => p.level)
+        const uniqueLevels = new Set(levels)
+        if (levels.length !== uniqueLevels.size) {
+          this.$message.error('奖品等级不能重复，请检查设置')
           return
         }
         

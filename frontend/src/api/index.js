@@ -52,6 +52,17 @@ export default {
   register(userData) {
     return api.post('/auth/register/', userData)
   },
+  changePassword(data) {
+    return api.post('/auth/change-password/', data)
+  },
+  
+  // Bot配置相关
+  getBotConfig() {
+    return api.get('/bot-config/')
+  },
+  updateBotConfig(data) {
+    return api.put('/bot-config/', data)
+  },
   
   // 抽奖相关
   getLotteries(page = 1) {
@@ -94,5 +105,13 @@ export default {
   // 用户相关
   getOrCreateUser(data) {
     return api.post('/users/get_or_create/', data)
+  },
+  
+  // 登录记录相关
+  getLoginRecords() {
+    return api.get('/login-records/')
+  },
+  getLoginRecord(id) {
+    return api.get(`/login-records/${id}/`)
   }
 }

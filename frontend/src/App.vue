@@ -14,6 +14,8 @@
               <el-menu-item index="/lotteries">抽奖列表</el-menu-item>
               <el-menu-item index="/create">创建抽奖</el-menu-item>
               <el-menu-item index="/statistics">数据统计</el-menu-item>
+              <el-menu-item index="/bot-config">Bot配置</el-menu-item>
+              <el-menu-item v-if="isAdmin" index="/login-records">登录记录</el-menu-item>
             </el-menu>
             
             <el-dropdown v-if="currentUser" style="margin-left: 20px;">
@@ -29,6 +31,10 @@
                       @{{ currentUser.username }}
                     </div>
                   </el-dropdown-item>
+                  <el-dropdown-item @click="showChangePasswordDialog">
+                    <el-icon><Key /></el-icon>
+                    修改密码
+                  </el-dropdown-item>
                   <el-dropdown-item divided @click="handleLogout">
                     <el-icon><SwitchButton /></el-icon>
                     退出登录
@@ -43,11 +49,51 @@
         <router-view />
       </el-main>
     </el-container>
+    
+    <!-- 修改密码对话框 -->
+    <el-dialog
+      v-model="changePasswordDialogVisible"
+      title="修改密码"
+      width="450px"
+    >
+      <el-form :model="passwordForm" :rules="passwordRules" ref="passwordFormRef" label-width="100px">
+        <el-form-item label="旧密码" prop="old_password">
+          <el-input
+            v-model="passwordForm.old_password"
+            type="password"
+            placeholder="请输入旧密码"
+            show-password
+          />
+        </el-form-item>
+        <el-form-item label="新密码" prop="new_password">
+          <el-input
+            v-model="passwordForm.new_password"
+            type="password"
+            placeholder="请输入新密码"
+            show-password
+          />
+        </el-form-item>
+        <el-form-item label="确认密码" prop="confirm_password">
+          <el-input
+            v-model="passwordForm.confirm_password"
+            type="password"
+            placeholder="请再次输入新密码"
+            show-password
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="changePasswordDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleChangePassword" :loading="changingPassword">
+          确认修改
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script>
-import { User, ArrowDown, SwitchButton } from '@element-plus/icons-vue'
+import { User, ArrowDown, SwitchButton, Key } from '@element-plus/icons-vue'
 import api from './api'
 
 export default {
@@ -55,17 +101,50 @@ export default {
   components: {
     User,
     ArrowDown,
-    SwitchButton
+    SwitchButton,
+    Key
   },
   data() {
     return {
       activeIndex: '/',
-      currentUser: null
+      currentUser: null,
+      changePasswordDialogVisible: false,
+      changingPassword: false,
+      passwordForm: {
+        old_password: '',
+        new_password: '',
+        confirm_password: ''
+      },
+      passwordRules: {
+        old_password: [
+          { required: true, message: '请输入旧密码', trigger: 'blur' }
+        ],
+        new_password: [
+          { required: true, message: '请输入新密码', trigger: 'blur' },
+          { min: 6, message: '密码长度至少6位', trigger: 'blur' }
+        ],
+        confirm_password: [
+          { required: true, message: '请再次输入新密码', trigger: 'blur' },
+          { 
+            validator: (rule, value, callback) => {
+              if (value !== this.passwordForm.new_password) {
+                callback(new Error('两次输入的密码不一致'))
+              } else {
+                callback()
+              }
+            }, 
+            trigger: 'blur' 
+          }
+        ]
+      }
     }
   },
   computed: {
     isLoginPage() {
       return this.$route.path === '/login'
+    },
+    isAdmin() {
+      return this.currentUser && this.currentUser.username === 'admin'
     }
   },
   mounted() {
@@ -86,6 +165,57 @@ export default {
     
     goHome() {
       this.$router.push('/')
+    },
+    
+    showChangePasswordDialog() {
+      this.changePasswordDialogVisible = true
+      // 重置表单
+      this.passwordForm = {
+        old_password: '',
+        new_password: '',
+        confirm_password: ''
+      }
+      // 清除验证错误
+      this.$nextTick(() => {
+        this.$refs.passwordFormRef?.clearValidate()
+      })
+    },
+    
+    async handleChangePassword() {
+      try {
+        await this.$refs.passwordFormRef.validate()
+        
+        this.changingPassword = true
+        
+        await api.changePassword({
+          old_password: this.passwordForm.old_password,
+          new_password: this.passwordForm.new_password
+        })
+        
+        this.$message.success('密码修改成功，请重新登录')
+        
+        // 关闭对话框
+        this.changePasswordDialogVisible = false
+        
+        // 清除登录状态
+        this.currentUser = null
+        localStorage.removeItem('user')
+        
+        // 跳转到登录页
+        setTimeout(() => {
+          this.$router.push('/login')
+        }, 1000)
+        
+      } catch (error) {
+        console.error('修改密码失败:', error)
+        if (error.response && error.response.data && error.response.data.error) {
+          this.$message.error(error.response.data.error)
+        } else {
+          this.$message.error('修改密码失败，请重试')
+        }
+      } finally {
+        this.changingPassword = false
+      }
     },
     
     async handleLogout() {

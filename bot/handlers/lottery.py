@@ -5,7 +5,6 @@
 import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from services.api import APIService
 from utils.pagination import paginate, create_pagination_keyboard
 
 logger = logging.getLogger(__name__)
@@ -14,9 +13,18 @@ logger = logging.getLogger(__name__)
 class LotteryHandler:
     """抽奖处理器"""
     
-    def __init__(self):
-        self.api = APIService()
+    def __init__(self, admin_user_id: int = None):
+        self.admin_user_id = admin_user_id
         self.page_size = 5  # 每页显示5个抽奖活动
+        
+        # 延迟导入DjangoService（避免在单机器人模式下报错）
+        if admin_user_id:
+            from services.django_service import DjangoService
+            self.service = DjangoService(admin_user_id)
+        else:
+            # 向后兼容：单机器人模式
+            from services.api import APIService
+            self.service = APIService()
     
     def _get_level_emoji(self, level):
         """根据等级返回对应的emoji"""
@@ -37,7 +45,7 @@ class LotteryHandler:
         """
         try:
             # 获取所有进行中的抽奖
-            lotteries = self.api.get_active_lotteries()
+            lotteries = self.service.get_active_lotteries()
             
             if not lotteries:
                 keyboard = [[InlineKeyboardButton("🏠 返回主菜单", callback_data='main_menu')]]
@@ -128,7 +136,7 @@ class LotteryHandler:
         user = query.from_user
         
         try:
-            result = self.api.participate_lottery(lottery_id, user.id)
+            result = self.service.participate_lottery(lottery_id, user.id)
             
             if result['success']:
                 keyboard = [
@@ -174,7 +182,7 @@ class LotteryHandler:
             context: 上下文对象
         """
         try:
-            result = self.api.draw_lottery(lottery_id)
+            result = self.service.draw_lottery(lottery_id)
             
             if result['success']:
                 data = result['data']

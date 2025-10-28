@@ -4,7 +4,6 @@
 """
 import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from services.api import APIService
 
 logger = logging.getLogger(__name__)
 
@@ -12,8 +11,17 @@ logger = logging.getLogger(__name__)
 class UserHandler:
     """用户处理器"""
     
-    def __init__(self):
-        self.api = APIService()
+    def __init__(self, admin_user_id: int = None):
+        self.admin_user_id = admin_user_id
+        
+        # 延迟导入DjangoService（避免在单机器人模式下报错）
+        if admin_user_id:
+            from services.django_service import DjangoService
+            self.service = DjangoService(admin_user_id)
+        else:
+            # 向后兼容：单机器人模式
+            from services.api import APIService
+            self.service = APIService()
     
     def _get_level_emoji(self, level):
         """根据等级返回对应的emoji"""
@@ -30,65 +38,43 @@ class UserHandler:
         
         try:
             # 获取我参与的抽奖（包含抽奖详情）
-            participations = self.api.get_my_participations(user.id)
+            participations = self.service.get_my_participations(user.id)
             
             # 获取我中奖的记录
-            wins = self.api.get_my_wins(user.id)
+            wins = self.service.get_my_wins(user.id)
             
             # 筛选出未开奖的抽奖（状态为 active）
-            pending_lotteries = []
-            for p in participations:
-                lottery = p.get('lottery')
-                if lottery and lottery.get('status') == 'active':
-                    pending_lotteries.append(lottery)
+            # 注意：DjangoService返回的格式不包含嵌套的lottery对象
+            pending_count = sum(1 for p in participations if p.get('lottery_status') == 'active')
             
             # 构建消息 - 顶部统计卡片
             text = "━━━━━━━━━━━━━━━━━━━\n"
             text += "📊 我的抽奖统计\n"
             text += "━━━━━━━━━━━━━━━━━━━\n"
             text += f"🎟️ 参与总数：{len(participations)} 个\n"
-            text += f"⏳ 等待开奖：{len(pending_lotteries)} 个\n"
+            text += f"⏳ 等待开奖：{pending_count} 个\n"
             text += f"🏆 中奖次数：{len(wins)} 次\n"
             text += "━━━━━━━━━━━━━━━━━━━\n\n"
             
-            # 显示未开奖的抽奖列表 - 重点突出（支持多奖品）
-            if pending_lotteries:
-                text += "⏳ 正在参与的抽奖活动\n\n"
-                for i, lottery in enumerate(pending_lotteries, 1):
-                    text += f"┌─────────────────\n"
-                    text += f"│ 🎁 【{lottery['title']}】\n"
-                    text += f"├─────────────────\n"
-                    
-                    # 显示奖品（支持多奖品）
-                    prizes = lottery.get('prizes', [])
-                    if prizes:
-                        # 多奖品格式
-                        text += f"│ 🏆 奖品：\n"
-                        for prize in prizes:
-                            level_emoji = self._get_level_emoji(prize.get('level', 1))
-                            text += f"│   {level_emoji} {prize['name']} x{prize['winner_count']}\n"
-                    else:
-                        # 向后兼容：单奖品
-                        text += f"│ 🎯 奖品：{lottery['prize_name']}\n"
-                        text += f"│ 🔢 数量：x{lottery['prize_count']}\n"
-                    
-                    text += f"│ 👥 参与："
-                    if lottery['max_participants'] > 0:
-                        text += f"{lottery['participant_count']}/{lottery['max_participants']} 人"
-                    else:
-                        text += f"{lottery['participant_count']} 人（不限）"
-                    text += f"\n└─────────────────\n"
-                    if i < len(pending_lotteries):  # 不是最后一个
-                        text += "\n"
+            # 显示最近参与的抽奖
+            if participations:
+                text += "📋 最近参与的抽奖\n\n"
+                for p in participations[:5]:  # 只显示最近5个
+                    status_emoji = "⏳" if p['lottery_status'] == 'active' else "✅"
+                    text += f"{status_emoji} {p['lottery_title']}\n"
+                if len(participations) > 5:
+                    text += f"\n... 还有 {len(participations) - 5} 个\n"
+                text += "\n"
             
-            # 显示中奖记录 - 突出显示（支持显示奖品等级）
+            # 显示中奖记录
             if wins:
-                text += "\n🎉 中奖记录\n"
+                text += "🎉 中奖记录\n"
                 text += "━━━━━━━━━━━━━━━━━━━\n"
-                for win in wins:
-                    # 优先使用 prize_display_name，否则使用 prize_name
-                    prize_display = win.get('prize_display_name', win.get('prize_name', '未知奖品'))
-                    text += f"✨ {prize_display}\n"
+                for win in wins[:10]:  # 只显示最近10个
+                    text += f"🏆 {win['lottery_title']}\n"
+                    text += f"   奖品：{win['prize_name']}\n"
+                if len(wins) > 10:
+                    text += f"\n... 还有 {len(wins) - 10} 个\n"
                 text += "━━━━━━━━━━━━━━━━━━━\n"
             
             keyboard = [[InlineKeyboardButton("🏠 返回主菜单", callback_data='main_menu')]]

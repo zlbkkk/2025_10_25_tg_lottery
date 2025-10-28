@@ -8,11 +8,19 @@
         </div>
       </template>
       
+      <el-alert
+        title="请使用用户名登录"
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 20px;"
+      />
+      
       <el-form :model="form" :rules="rules" ref="formRef" @keyup.enter="handleLogin">
         <el-form-item prop="username">
           <el-input 
             v-model="form.username" 
-            placeholder="请输入用户名"
+            placeholder="请输入用户名（非姓名）"
             size="large"
           >
             <template #prefix>
@@ -47,19 +55,92 @@
           </el-button>
         </el-form-item>
         
-        <div class="login-tip">
-          <el-alert
-            title="默认账号"
-            type="info"
-            :closable="false"
-            show-icon
-          >
-            <p>用户名：admin</p>
-            <p>密码：admin123</p>
-          </el-alert>
+        <div style="text-align: center; margin-top: 15px;">
+          <el-link type="primary" @click="showRegisterDialog">
+            还没有账号？立即注册
+          </el-link>
         </div>
+        
+        
       </el-form>
     </el-card>
+    
+    <!-- 注册对话框 -->
+    <el-dialog
+      v-model="registerDialogVisible"
+      title="用户注册"
+      width="450px"
+      :close-on-click-modal="false"
+    >
+      <el-alert
+        type="warning"
+        :closable="false"
+        style="margin-bottom: 20px;"
+      >
+        <template #title>
+          <div style="font-size: 13px;">
+            <strong>请注意：</strong>用户名用于登录，姓名用于显示
+          </div>
+        </template>
+      </el-alert>
+      
+      <el-form :model="registerForm" :rules="registerRules" ref="registerFormRef" label-width="100px">
+        <el-form-item label="用户名" prop="username">
+          <el-input 
+            v-model="registerForm.username" 
+            placeholder="登录用：字母数字，4-20位"
+          >
+            <template #prefix>
+              <el-icon><User /></el-icon>
+            </template>
+          </el-input>
+        </el-form-item>
+        
+        <el-form-item label="姓名" prop="first_name">
+          <el-input 
+            v-model="registerForm.first_name" 
+            placeholder="显示用：真实姓名"
+          >
+            <template #prefix>
+              <el-icon><User /></el-icon>
+            </template>
+          </el-input>
+        </el-form-item>
+        
+        <el-form-item label="密码" prop="password">
+          <el-input 
+            v-model="registerForm.password" 
+            type="password"
+            placeholder="至少6位"
+            show-password
+          >
+            <template #prefix>
+              <el-icon><Lock /></el-icon>
+            </template>
+          </el-input>
+        </el-form-item>
+        
+        <el-form-item label="确认密码" prop="confirm_password">
+          <el-input 
+            v-model="registerForm.confirm_password" 
+            type="password"
+            placeholder="再次输入密码"
+            show-password
+          >
+            <template #prefix>
+              <el-icon><Lock /></el-icon>
+            </template>
+          </el-input>
+        </el-form-item>
+      </el-form>
+      
+      <template #footer>
+        <el-button @click="registerDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleRegister" :loading="registerLoading">
+          注册
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -87,7 +168,45 @@ export default {
           { required: true, message: '请输入密码', trigger: 'blur' }
         ]
       },
-      loading: false
+      loading: false,
+      
+      // 注册相关
+      registerDialogVisible: false,
+      registerLoading: false,
+      registerForm: {
+        username: '',
+        password: '',
+        confirm_password: '',
+        first_name: ''
+      },
+      registerRules: {
+        username: [
+          { required: true, message: '请输入用户名', trigger: 'blur' },
+          { min: 4, max: 20, message: '用户名长度为4-20位', trigger: 'blur' },
+          { pattern: /^[a-zA-Z0-9_]+$/, message: '只能包含字母、数字和下划线', trigger: 'blur' }
+        ],
+        first_name: [
+          { required: true, message: '请输入姓名', trigger: 'blur' },
+          { min: 2, max: 20, message: '姓名长度为2-20位', trigger: 'blur' }
+        ],
+        password: [
+          { required: true, message: '请输入密码', trigger: 'blur' },
+          { min: 6, message: '密码至少6位', trigger: 'blur' }
+        ],
+        confirm_password: [
+          { required: true, message: '请再次输入密码', trigger: 'blur' },
+          { 
+            validator: (rule, value, callback) => {
+              if (value !== this.registerForm.password) {
+                callback(new Error('两次输入的密码不一致'))
+              } else {
+                callback()
+              }
+            }, 
+            trigger: 'blur' 
+          }
+        ]
+      }
     }
   },
   mounted() {
@@ -127,6 +246,59 @@ export default {
         }
       } finally {
         this.loading = false
+      }
+    },
+    
+    showRegisterDialog() {
+      this.registerDialogVisible = true
+      // 重置表单
+      this.registerForm = {
+        username: '',
+        password: '',
+        confirm_password: '',
+        first_name: ''
+      }
+      // 清除验证错误
+      this.$nextTick(() => {
+        this.$refs.registerFormRef?.clearValidate()
+      })
+    },
+    
+    async handleRegister() {
+      try {
+        await this.$refs.registerFormRef.validate()
+        
+        this.registerLoading = true
+        
+        // 调用注册API（后端会自动登录）
+        const user = await api.register({
+          username: this.registerForm.username,
+          password: this.registerForm.password,
+          first_name: this.registerForm.first_name
+        })
+        
+        // 存储用户信息
+        localStorage.setItem('user', JSON.stringify(user))
+        
+        this.$message.success(`注册成功！欢迎您，${user.first_name || user.username}！`)
+        
+        // 关闭对话框
+        this.registerDialogVisible = false
+        
+        // 跳转到首页
+        setTimeout(() => {
+          this.$router.push('/')
+        }, 500)
+        
+      } catch (error) {
+        console.error('注册失败:', error)
+        if (error.response && error.response.data && error.response.data.error) {
+          this.$message.error(error.response.data.error)
+        } else {
+          this.$message.error('注册失败，请重试')
+        }
+      } finally {
+        this.registerLoading = false
       }
     }
   }

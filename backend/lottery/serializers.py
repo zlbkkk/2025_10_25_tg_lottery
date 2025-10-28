@@ -2,7 +2,7 @@
 Django REST Framework 序列化器
 """
 from rest_framework import serializers
-from .models import TelegramUser, Lottery, Prize, Participation, Winner
+from .models import TelegramUser, Lottery, Prize, Participation, Winner, BotConfig, LoginRecord
 
 
 class TelegramUserSerializer(serializers.ModelSerializer):
@@ -232,3 +232,55 @@ class LotteryCreateSerializer(serializers.ModelSerializer):
                         Prize.objects.create(lottery=instance, **prize_data)
         
         return instance
+
+
+class BotConfigSerializer(serializers.ModelSerializer):
+    """Bot配置序列化器"""
+    username = serializers.CharField(source='admin_user.username', read_only=True)
+    
+    class Meta:
+        model = BotConfig
+        fields = ['admin_user_id', 'username', 'bot_token', 'bot_username', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['admin_user_id', 'username', 'created_at', 'updated_at']
+        extra_kwargs = {
+            'bot_token': {'write_only': True}  # 安全起见，不返回完整token
+        }
+    
+    def to_representation(self, instance):
+        """自定义输出，只返回token的前缀"""
+        data = super().to_representation(instance)
+        if instance.bot_token:
+            # 只显示token的前10个字符 + ***
+            data['bot_token_preview'] = instance.bot_token[:10] + '***' if len(instance.bot_token) > 10 else '***'
+        else:
+            data['bot_token_preview'] = None
+        return data
+
+
+class LoginRecordSerializer(serializers.ModelSerializer):
+    """登录记录序列化器"""
+    username = serializers.CharField(source='user.username', read_only=True)
+    first_name = serializers.CharField(source='user.first_name', read_only=True)
+    last_name = serializers.CharField(source='user.last_name', read_only=True)
+    full_name = serializers.SerializerMethodField()
+    session_duration = serializers.IntegerField(read_only=True)
+    is_truly_active = serializers.BooleanField(read_only=True)  # 智能状态
+    
+    class Meta:
+        model = LoginRecord
+        fields = [
+            'id', 'username', 'first_name', 'last_name', 'full_name',
+            'ip_address', 'user_agent', 'device_type', 'browser', 
+            'login_time', 'logout_time', 'last_activity',
+            'session_duration', 'is_active', 'is_truly_active'
+        ]
+        read_only_fields = ['id', 'username', 'first_name', 'last_name', 'full_name', 
+                           'login_time', 'last_activity', 'session_duration', 
+                           'is_active', 'is_truly_active']
+    
+    def get_full_name(self, obj):
+        """获取完整姓名"""
+        last_name = obj.user.last_name or ''
+        first_name = obj.user.first_name or ''
+        full_name = f"{last_name}{first_name}".strip()
+        return full_name if full_name else obj.user.username

@@ -5,7 +5,6 @@
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from services.api import APIService
 
 logger = logging.getLogger(__name__)
 
@@ -13,15 +12,23 @@ logger = logging.getLogger(__name__)
 class MenuHandler:
     """菜单处理器"""
     
-    def __init__(self):
-        self.api = APIService()
+    def __init__(self, admin_user_id: int = None):
+        self.admin_user_id = admin_user_id
+        # 延迟导入DjangoService（避免在单机器人模式下报错）
+        if admin_user_id:
+            from services.django_service import DjangoService
+            self.service = DjangoService(admin_user_id)
+        else:
+            # 向后兼容：单机器人模式
+            from services.api import APIService
+            self.service = APIService()
     
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理 /start 命令"""
         user = update.effective_user
         
         # 注册或更新用户信息
-        self.api.register_user({
+        self.service.register_user({
             'telegram_id': user.id,
             'username': user.username,
             'first_name': user.first_name,

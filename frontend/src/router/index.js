@@ -5,6 +5,8 @@ import LotteryDetail from '../views/LotteryDetail.vue'
 import CreateLottery from '../views/CreateLottery.vue'
 import Statistics from '../views/Statistics.vue'
 import Login from '../views/Login.vue'
+import BotConfig from '../views/BotConfig.vue'
+import LoginRecords from '../views/LoginRecords.vue'
 import api from '../api'
 
 const routes = [
@@ -43,6 +45,17 @@ const routes = [
     path: '/statistics',
     name: 'Statistics',
     component: Statistics
+  },
+  {
+    path: '/bot-config',
+    name: 'BotConfig',
+    component: BotConfig
+  },
+  {
+    path: '/login-records',
+    name: 'LoginRecords',
+    component: LoginRecords,
+    meta: { requiresAdmin: true }  // 需要管理员权限
   }
 ]
 
@@ -51,7 +64,7 @@ const router = createRouter({
   routes
 })
 
-// 路由守卫：检查登录状态
+// 路由守卫：检查登录状态和管理员权限
 router.beforeEach(async (to, from, next) => {
   // 公开页面直接放行（包括登录页）
   if (to.meta.public) {
@@ -67,7 +80,15 @@ router.beforeEach(async (to, from, next) => {
   
   // 检查是否登录
   try {
-    await api.getCurrentUser()
+    const user = await api.getCurrentUser()
+    
+    // 检查是否需要管理员权限
+    if (to.meta.requiresAdmin && user.username !== 'admin') {
+      // 非管理员尝试访问管理员页面，重定向到首页
+      next('/')
+      return
+    }
+    
     next()
   } catch (error) {
     // 未登录，跳转到登录页

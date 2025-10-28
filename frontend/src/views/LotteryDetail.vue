@@ -3,8 +3,20 @@
     <el-card v-loading="loading">
       <template #header>
         <div class="card-header">
-          <el-button @click="$router.back()" :icon="ArrowLeft">返回</el-button>
-          <span style="margin-left: 20px; font-size: 20px; font-weight: bold;">抽奖详情</span>
+          <div style="display: flex; align-items: center;">
+            <el-button @click="$router.back()" :icon="ArrowLeft">返回</el-button>
+            <span style="margin-left: 20px; font-size: 20px; font-weight: bold;">抽奖详情</span>
+          </div>
+          <div>
+            <el-button
+              v-if="lottery && lottery.status === 'active'"
+              type="primary"
+              @click="drawLottery"
+            >
+              <el-icon style="margin-right: 5px;"><Trophy /></el-icon>
+              立即开奖
+            </el-button>
+          </div>
         </div>
       </template>
 
@@ -76,12 +88,11 @@
         </el-descriptions>
 
         <!-- 奖品设置详情（新格式） -->
-        <div v-if="lottery.prizes && lottery.prizes.length > 0" style="margin-top: 20px;">
-          <el-divider content-position="left" style="margin: 15px 0;">
-            <span style="font-weight: bold; color: #409EFF; font-size: 15px;">🏆 奖品设置</span>
-          </el-divider>
+        <div v-if="lottery.prizes && lottery.prizes.length > 0">
+          <el-divider style="margin: 15px 0;" />
+          <h3 style="margin: 10px 0;">奖品设置</h3>
           
-          <el-row :gutter="15">
+          <el-row :gutter="15" style="margin-top: 10px;">
             <el-col 
               v-for="prize in lottery.prizes" 
               :key="prize.id" 
@@ -137,18 +148,6 @@
               </el-card>
             </el-col>
           </el-row>
-        </div>
-
-        <!-- 操作按钮 -->
-        <div style="margin: 15px 0; text-align: center;">
-          <el-button
-            v-if="lottery.status === 'active'"
-            type="primary"
-            @click="drawLottery"
-          >
-            <el-icon style="margin-right: 5px;"><Trophy /></el-icon>
-            立即开奖
-          </el-button>
         </div>
 
         <!-- 参与者列表 -->
@@ -333,6 +332,7 @@ export default {
 
 .card-header {
   display: flex;
+  justify-content: space-between;
   align-items: center;
 }
 
