@@ -20,6 +20,9 @@
           <p style="margin: 0 0 8px 0;">
             前往 Telegram 搜索 <strong>@BotFather</strong>，发送 <code>/newbot</code> 创建您的Bot，将返回的 Token 粘贴到下方保存即可。
           </p>
+          <p style="margin: 0 0 8px 0; color: #67c23a;">
+            <strong>✅ 自动获取：</strong>保存时会自动验证Token并获取Bot用户名
+          </p>
           <p style="margin: 0; color: #e6a23c;">
             <strong>⚠️ 重要：</strong>不能配置与他人重复的token
           </p>
@@ -60,17 +63,6 @@
           </div>
         </el-form-item> -->
 
-        <el-form-item label="启用状态">
-          <el-switch
-            v-model="form.is_active"
-            active-text="启用"
-            inactive-text="禁用"
-          />
-          <div class="form-tip">
-            关闭后Bot将停止响应消息
-          </div>
-        </el-form-item>
-
         <el-form-item>
           <el-button type="primary" @click="handleSubmit" :loading="loading">
             <el-icon><Check /></el-icon>
@@ -87,31 +79,77 @@
 
       <div v-if="currentConfig" class="config-info">
         <h3>当前配置状态</h3>
-        <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="Bot用户名">
-            {{ currentConfig.bot_username || '未设置' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="Token状态">
-            <el-tag v-if="currentConfig.bot_token_preview" type="success" size="small">
-              已配置
-            </el-tag>
-            <el-tag v-else type="info" size="small">未配置</el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="启用状态">
-            <el-tag v-if="currentConfig.is_active" type="success" size="small">
-              启用中
-            </el-tag>
-            <el-tag v-else type="warning" size="small">已禁用</el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="更新时间">
-            {{ formatDate(currentConfig.updated_at) }}
-          </el-descriptions-item>
-        </el-descriptions>
+        <el-table 
+          :data="currentConfig.bot_token_preview || currentConfig.bot_username ? [currentConfig] : []" 
+          border 
+          size="small" 
+          style="width: 100%"
+        >
+          <el-table-column prop="bot_username" label="Bot用户名" min-width="100">
+            <template #default="scope">
+              {{ scope.row.bot_username || '未设置' }}
+            </template>
+          </el-table-column>
+          
+          <el-table-column label="Token状态" width="100" align="center">
+            <template #default="scope">
+              <el-tag v-if="scope.row.bot_token_preview" type="success" size="small">
+                已配置
+              </el-tag>
+              <el-tag v-else type="info" size="small">未配置</el-tag>
+            </template>
+          </el-table-column>
+          
+          <el-table-column label="启用状态" width="100" align="center">
+            <template #default="scope">
+              <el-tag v-if="scope.row.is_active" type="success" size="small">
+                启用中
+              </el-tag>
+              <el-tag v-else type="warning" size="small">已禁用</el-tag>
+            </template>
+          </el-table-column>
+          
+          <el-table-column prop="updated_at" label="更新时间" width="160">
+            <template #default="scope">
+              {{ formatDate(scope.row.updated_at) }}
+            </template>
+          </el-table-column>
+          
+          <el-table-column label="操作" width="250" align="center">
+            <template #default="scope">
+              <div style="display: flex; gap: 8px; align-items: center; justify-content: center;">
+                <!-- 启用/禁用开关 -->
+                <el-switch
+                  v-if="scope.row.bot_token_preview"
+                  v-model="scope.row.is_active"
+                  active-text="启用"
+                  inactive-text="禁用"
+                  @change="handleToggleStatus"
+                  :loading="loading"
+                  size="small"
+                />
+                <!-- 删除按钮 -->
+                <el-button 
+                  v-if="scope.row.bot_token_preview" 
+                  type="danger" 
+                  @click="handleDelete" 
+                  :loading="loading"
+                  plain
+                  size="small"
+                >
+                  <el-icon><Delete /></el-icon>
+                  删除配置
+                </el-button>
+                <span v-if="!scope.row.bot_token_preview" style="color: #909399; font-size: 12px;">-</span>
+              </div>
+            </template>
+          </el-table-column>
+        </el-table>
       </div>
 
       <div style="margin-top: 15px; padding: 8px 12px; background: #fef0f0; border-left: 3px solid #f56c6c; border-radius: 4px; font-size: 12px; color: #606266;">
         <strong style="color: #f56c6c;">💡 提示：</strong>
-        Token 保密 · 修改后10秒内自动生效 · 一个账号一个Bot
+        保存时自动验证Token并获取Bot用户名 · 修改后10秒内自动生效 · 一个账号一个Bot
       </div>
     </el-card>
   </div>
@@ -119,8 +157,8 @@
 
 <script>
 import { ref, reactive, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Key, User, Check, Connection } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Key, User, Check, Connection, Delete } from '@element-plus/icons-vue'
 import api from '@/api'
 
 export default {
@@ -129,7 +167,8 @@ export default {
     Key,
     User,
     Check,
-    Connection
+    Connection,
+    Delete
   },
   setup() {
     const formRef = ref(null)
@@ -138,8 +177,7 @@ export default {
     
     const form = reactive({
       bot_token: '',
-      bot_username: '',
-      is_active: true
+      bot_username: ''
     })
     
     const rules = {
@@ -163,7 +201,6 @@ export default {
         if (data.bot_username) {
           form.bot_username = data.bot_username
         }
-        form.is_active = data.is_active
         
         // 不显示完整token，只显示预览
         form.bot_token = ''
@@ -181,9 +218,7 @@ export default {
         loading.value = true
         
         // 只发送填写了的字段
-        const updateData = {
-          is_active: form.is_active
-        }
+        const updateData = {}
         
         if (form.bot_token) {
           updateData.bot_token = form.bot_token
@@ -241,6 +276,30 @@ export default {
       }
     }
     
+    // 切换启用/禁用状态
+    const handleToggleStatus = async (value) => {
+      try {
+        loading.value = true
+        
+        const result = await api.updateBotConfig({
+          is_active: value
+        })
+        
+        ElMessage.success(value ? 'Bot已启用' : 'Bot已禁用')
+        
+        // 重新加载配置
+        await loadConfig()
+      } catch (error) {
+        console.error('更新状态失败:', error)
+        ElMessage.error('更新状态失败')
+        
+        // 恢复原状态
+        currentConfig.value.is_active = !value
+      } finally {
+        loading.value = false
+      }
+    }
+    
     // 测试连接
     const handleTest = async () => {
       if (!form.bot_token) {
@@ -270,6 +329,42 @@ export default {
       }
     }
     
+    // 删除配置
+    const handleDelete = async () => {
+      try {
+        await ElMessageBox.confirm(
+          '删除后，Bot 将停止工作，您可以重新配置新的 Bot Token。确定要删除吗？',
+          '确认删除 Bot 配置',
+          {
+            confirmButtonText: '确定删除',
+            cancelButtonText: '取消',
+            type: 'warning',
+            confirmButtonClass: 'el-button--danger'
+          }
+        )
+        
+        loading.value = true
+        
+        const result = await api.deleteBotConfig()
+        
+        ElMessage.success(result.message || 'Bot配置已删除')
+        
+        // 重新加载配置
+        await loadConfig()
+        
+        // 清空表单
+        form.bot_token = ''
+        form.bot_username = ''
+      } catch (error) {
+        if (error !== 'cancel') {
+          console.error('删除配置失败:', error)
+          ElMessage.error('删除配置失败')
+        }
+      } finally {
+        loading.value = false
+      }
+    }
+    
     // 格式化日期
     const formatDate = (dateString) => {
       if (!dateString) return '-'
@@ -289,6 +384,8 @@ export default {
       rules,
       handleSubmit,
       handleTest,
+      handleToggleStatus,
+      handleDelete,
       formatDate
     }
   }

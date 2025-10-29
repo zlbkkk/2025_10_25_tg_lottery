@@ -63,6 +63,9 @@ export default {
   updateBotConfig(data) {
     return api.put('/bot-config/', data)
   },
+  deleteBotConfig() {
+    return api.delete('/bot-config/')
+  },
   
   // 抽奖相关
   getLotteries(page = 1) {

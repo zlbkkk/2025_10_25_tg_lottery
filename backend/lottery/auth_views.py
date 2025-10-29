@@ -13,6 +13,7 @@ from django.utils import timezone
 from .models import BotConfig, LoginRecord
 from .serializers import BotConfigSerializer, LoginRecordSerializer
 import re
+import requests
 
 
 def get_client_ip(request):
@@ -256,13 +257,14 @@ def register_view(request):
     }, status=status.HTTP_201_CREATED)
 
 
-@api_view(['GET', 'PUT'])
+@api_view(['GET', 'PUT', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def bot_config_view(request):
     """
-    获取或更新当前用户的Bot配置
+    获取、更新或删除当前用户的Bot配置
     GET /api/bot-config/  - 获取配置
     PUT /api/bot-config/  - 更新配置
+    DELETE /api/bot-config/  - 删除配置（清空Token）
     Body: {
         "bot_token": "123456:ABC-DEF...",
         "bot_username": "@MyLotteryBot",
@@ -281,6 +283,8 @@ def bot_config_view(request):
     elif request.method == 'PUT':
         # 验证 Bot Token 唯一性
         new_token = request.data.get('bot_token')
+        update_data = request.data.copy()
+        
         if new_token:
             # 检查是否有其他用户使用了相同的 Token
             duplicate_config = BotConfig.objects.filter(
@@ -293,8 +297,39 @@ def bot_config_view(request):
                     'detail': f'该 Token 已被用户 "{duplicate_config.admin_user.username}" 使用。每个管理员必须创建自己独立的 Bot。',
                     'help': '请前往 Telegram 搜索 @BotFather，发送 /newbot 创建一个新的 Bot。'
                 }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # 自动获取Bot用户名
+            try:
+                telegram_api_url = f"https://api.telegram.org/bot{new_token}/getMe"
+                response = requests.get(telegram_api_url, timeout=10)
+                
+                if response.status_code == 200:
+                    bot_info = response.json()
+                    if bot_info.get('ok'):
+                        bot_username = bot_info['result'].get('username')
+                        if bot_username:
+                            # 自动填充bot_username
+                            update_data['bot_username'] = f"@{bot_username}"
+                else:
+                    return Response({
+                        'error': 'Bot Token 无效',
+                        'detail': 'Telegram API 拒绝了该 Token，请检查 Token 是否正确。',
+                        'help': '请前往 Telegram 搜索 @BotFather，使用 /mybots 查看您的 Bot Token。'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            except requests.Timeout:
+                return Response({
+                    'error': '连接 Telegram 服务器超时',
+                    'detail': '无法验证 Bot Token，请检查网络连接。',
+                    'help': '请确保服务器能够访问 api.telegram.org'
+                }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            except Exception as e:
+                return Response({
+                    'error': '验证 Bot Token 失败',
+                    'detail': f'错误信息：{str(e)}',
+                    'help': '请检查 Token 格式是否正确（例如：123456789:ABCdefGHIjklMNOpqrs）'
+                }, status=status.HTTP_400_BAD_REQUEST)
         
-        serializer = BotConfigSerializer(bot_config, data=request.data, partial=True)
+        serializer = BotConfigSerializer(bot_config, data=update_data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response({
@@ -302,6 +337,18 @@ def bot_config_view(request):
                 'data': serializer.data
             })
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    elif request.method == 'DELETE':
+        # 清空Bot配置（保留记录，但清空Token和用户名）
+        bot_config.bot_token = ''
+        bot_config.bot_username = ''
+        bot_config.is_active = False
+        bot_config.save()
+        
+        return Response({
+            'message': 'Bot配置已删除，现在可以重新配置新的Bot Token',
+            'data': BotConfigSerializer(bot_config).data
+        })
 
 
 class LoginRecordViewSet(ReadOnlyModelViewSet):
