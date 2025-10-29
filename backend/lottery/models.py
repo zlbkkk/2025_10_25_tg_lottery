@@ -138,7 +138,7 @@ class LoginRecord(models.Model):
     def is_truly_active(self):
         """
         智能判断是否真正在线
-        如果超过30分钟没有活动，视为离线
+        如果超过1小时没有活动，视为离线
         """
         from django.utils import timezone
         from datetime import timedelta
@@ -151,11 +151,11 @@ class LoginRecord(models.Model):
         
         # 如果有最后活动时间，检查是否超时
         if self.last_activity:
-            timeout = timedelta(minutes=30)  # 30分钟超时
+            timeout = timedelta(hours=1)  # 1小时超时
             return timezone.now() - self.last_activity < timeout
         
         # 如果没有最后活动时间，使用登录时间判断
-        timeout = timedelta(minutes=30)
+        timeout = timedelta(hours=1)
         return timezone.now() - self.login_time < timeout
 
 

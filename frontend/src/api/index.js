@@ -29,7 +29,26 @@ api.interceptors.response.use(
       // 如果不是登录页，跳转到登录页
       if (window.location.pathname !== '/login') {
         localStorage.removeItem('user')
-        window.location.href = '/login'
+        
+        // 检查是否是会话超时
+        const errorData = error.response.data
+        if (errorData && errorData.code === 'SESSION_TIMEOUT') {
+          // 会话超时，显示提示
+          import('element-plus').then(ElementPlus => {
+            ElementPlus.ElMessage.warning({
+              message: '会话已超时（1小时无活动），请重新登录',
+              duration: 3000
+            })
+          })
+          
+          // 延迟跳转，让用户看到提示
+          setTimeout(() => {
+            window.location.href = '/login'
+          }, 1000)
+        } else {
+          // 其他401错误，直接跳转
+          window.location.href = '/login'
+        }
       }
     }
     

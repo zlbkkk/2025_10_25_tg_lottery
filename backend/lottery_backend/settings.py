@@ -144,7 +144,8 @@ CSRF_COOKIE_HTTPONLY = False  # 允许 JavaScript 读取 CSRF token
 CSRF_COOKIE_SAMESITE = 'Lax'
 
 # Session 配置
-SESSION_COOKIE_AGE = 86400 * 7  # 7天
+SESSION_COOKIE_AGE = 3600  # 1小时（无活动自动登出）
+SESSION_SAVE_EVERY_REQUEST = True  # 每次请求都更新session，重置超时计时
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
 
