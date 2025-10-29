@@ -7,14 +7,22 @@
             <el-button @click="$router.back()" :icon="ArrowLeft">返回</el-button>
             <span style="margin-left: 20px; font-size: 20px; font-weight: bold;">抽奖详情</span>
           </div>
-          <div>
+          <div style="display: flex; gap: 10px;">
             <el-button
               v-if="lottery && lottery.status === 'active'"
               type="primary"
-              @click="drawLottery"
+              @click="showManualDrawDialog"
+            >
+              <el-icon style="margin-right: 5px;"><User /></el-icon>
+              手动指定
+            </el-button>
+            <el-button
+              v-if="lottery && lottery.status === 'active'"
+              type="success"
+              @click="randomDrawLottery"
             >
               <el-icon style="margin-right: 5px;"><Trophy /></el-icon>
-              立即开奖
+              随机开奖
             </el-button>
           </div>
         </div>
@@ -221,24 +229,98 @@
         </el-table>
       </div>
     </el-card>
+
+    <!-- 手动指定中奖人对话框 -->
+    <el-dialog
+      v-model="manualDrawDialogVisible"
+      title="手动指定中奖人"
+      width="700px"
+      :close-on-click-modal="false"
+    >
+      <div v-loading="participantsLoading">
+        <el-alert
+          type="info"
+          :closable="false"
+          style="margin-bottom: 15px;"
+        >
+          <template #title>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span>请选择中奖人（将按奖品等级依次分配：一等奖、二等奖...）</span>
+              <span style="color: #409eff;">已选择：{{ selectedWinners.length }} 人</span>
+            </div>
+          </template>
+        </el-alert>
+
+        <div v-if="participants.length === 0 && !participantsLoading" style="text-align: center; padding: 40px; color: #999;">
+          <el-icon :size="60"><UserFilled /></el-icon>
+          <p style="margin-top: 15px;">暂无参与者</p>
+        </div>
+
+        <el-table
+          v-else
+          :data="participants"
+          :max-height="400"
+          @selection-change="handleSelectionChange"
+          ref="participantTable"
+        >
+          <el-table-column type="selection" width="55" />
+          <el-table-column prop="display_name" label="用户名" width="180">
+            <template #default="scope">
+              <div>
+                <strong>{{ scope.row.display_name }}</strong>
+                <div style="font-size: 12px; color: #999;">@{{ scope.row.username || 'N/A' }}</div>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="telegram_id" label="Telegram ID" width="130" />
+          <el-table-column prop="participated_at" label="参与时间" width="170">
+            <template #default="scope">
+              {{ formatDate(scope.row.participated_at) }}
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="manualDrawDialogVisible = false">取消</el-button>
+          <el-button 
+            type="primary" 
+            @click="confirmManualDraw"
+            :disabled="selectedWinners.length === 0"
+            :loading="drawLoading"
+          >
+            确定开奖（已选 {{ selectedWinners.length }} 人）
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script>
 import api from '../api'
-import { ArrowLeft, Picture, Trophy } from '@element-plus/icons-vue'
+import { ArrowLeft, Picture, Trophy, User, UserFilled } from '@element-plus/icons-vue'
 
 export default {
   name: 'LotteryDetail',
   components: {
     ArrowLeft,
     Picture,
-    Trophy
+    Trophy,
+    User,
+    UserFilled
   },
   data() {
     return {
       lottery: null,
-      loading: false
+      loading: false,
+      // 手动指定中奖人相关
+      manualDrawDialogVisible: false,
+      participantsLoading: false,
+      drawLoading: false,
+      participants: [],
+      selectedWinners: []
     }
   },
   mounted() {
@@ -270,9 +352,77 @@ export default {
         this.loading = false
       }
     },
-    async drawLottery() {
+    // 显示手动指定中奖人对话框
+    async showManualDrawDialog() {
+      this.manualDrawDialogVisible = true
+      this.participants = []
+      this.selectedWinners = []
+      
+      // 加载参与者列表
+      await this.loadParticipants(this.lottery.id)
+    },
+    // 加载参与者列表
+    async loadParticipants(lotteryId) {
       try {
-        await this.$confirm('确定要开奖吗？开奖后将无法撤销！', '提示', {
+        this.participantsLoading = true
+        const data = await api.getParticipants(lotteryId)
+        this.participants = data.participants || []
+        
+        if (this.participants.length === 0) {
+          this.$message.warning('该抽奖暂无参与者')
+        }
+      } catch (error) {
+        console.error('加载参与者失败:', error)
+        this.$message.error('加载参与者失败')
+      } finally {
+        this.participantsLoading = false
+      }
+    },
+    // 选择变化时的处理
+    handleSelectionChange(selection) {
+      // 直接保存选择，后端会验证总名额
+      this.selectedWinners = selection
+    },
+    // 确认手动指定开奖
+    async confirmManualDraw() {
+      if (this.selectedWinners.length === 0) {
+        this.$message.warning('请至少选择一个中奖人')
+        return
+      }
+      
+      try {
+        await this.$confirm(
+          `确定将以下 ${this.selectedWinners.length} 人指定为中奖者吗？\n将按奖品等级依次分配（一等奖、二等奖...）\n\n${this.selectedWinners.map((w, i) => `${i + 1}. ${w.display_name}`).join('\n')}`,
+          '确认手动指定开奖',
+          {
+            confirmButtonText: '确定',
+            cancelButtonText: '取消',
+            type: 'warning'
+          }
+        )
+        
+        this.drawLoading = true
+        const winnerIds = this.selectedWinners.map(w => w.id)
+        await api.manualDrawLottery(this.lottery.id, winnerIds)
+        
+        this.$message.success('手动指定开奖成功！')
+        this.manualDrawDialogVisible = false
+        // 重新加载详情
+        await this.loadLotteryDetail()
+      } catch (error) {
+        if (error !== 'cancel') {
+          console.error('手动指定开奖失败:', error)
+          const errorMsg = error.response?.data?.error || '手动指定开奖失败'
+          this.$message.error(errorMsg)
+        }
+      } finally {
+        this.drawLoading = false
+      }
+    },
+    // 随机开奖
+    async randomDrawLottery() {
+      try {
+        await this.$confirm('确定要随机开奖吗？开奖后将无法撤销！', '提示', {
           confirmButtonText: '确定开奖',
           cancelButtonText: '取消',
           type: 'warning'
@@ -280,14 +430,15 @@ export default {
         
         this.loading = true
         await api.drawLottery(this.lottery.id)
-        this.$message.success('开奖成功！')
+        this.$message.success('随机开奖成功！')
         
         // 重新加载详情
         await this.loadLotteryDetail()
       } catch (error) {
         if (error !== 'cancel') {
-          console.error('开奖失败:', error)
-          this.$message.error('开奖失败')
+          console.error('随机开奖失败:', error)
+          const errorMsg = error.response?.data?.error || '随机开奖失败'
+          this.$message.error(errorMsg)
         }
       } finally {
         this.loading = false
