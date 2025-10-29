@@ -198,8 +198,15 @@
               @{{ scope.row.user.username || '无' }}
             </template>
           </el-table-column>
-          <el-table-column prop="prize_name" label="奖品" width="200" />
-          <el-table-column prop="won_at" label="中奖时间">
+          <el-table-column label="奖项" width="120">
+            <template #default="scope">
+              <el-tag type="success" effect="dark">
+                {{ scope.row.prize_level_text || '-' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="prize_name" label="奖品" width="180" />
+          <el-table-column prop="won_at" label="中奖时间" width="180">
             <template #default="scope">
               {{ formatDate(scope.row.won_at) }}
             </template>

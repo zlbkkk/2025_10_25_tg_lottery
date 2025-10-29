@@ -176,6 +176,19 @@ class TelegramUser(models.Model):
 
     def __str__(self):
         return f"{self.username or self.first_name} ({self.telegram_id})"
+    
+    def get_display_name(self):
+        """获取显示名称"""
+        if self.last_name and self.first_name:
+            return f"{self.first_name}{self.last_name}"
+        elif self.first_name:
+            return self.first_name
+        elif self.last_name:
+            return self.last_name
+        elif self.username:
+            return self.username
+        else:
+            return f"User_{self.telegram_id}"
 
 
 class Lottery(models.Model):

@@ -259,7 +259,7 @@ class LotteryViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def manual_draw(self, request, pk=None):
-        """手动指定中奖人"""
+        """手动指定中奖人 - 按奖品等级依次分配"""
         lottery = self.get_object()
         
         if lottery.status != 'active':
@@ -291,10 +291,21 @@ class LotteryViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # 验证选择的人数是否超过奖品数量
-        if len(winner_ids) > lottery.prize_count:
+        # 获取所有奖品（按等级排序）
+        prizes = lottery.prizes.all().order_by('level')
+        if not prizes.exists():
             return Response(
-                {'error': f'选择的中奖人数({len(winner_ids)})不能超过奖品数量({lottery.prize_count})'},
+                {'error': '该抽奖没有配置奖品'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 计算总的中奖名额
+        total_winner_slots = sum(prize.winner_count for prize in prizes)
+        
+        # 验证选择的人数是否超过总名额
+        if len(winner_ids) > total_winner_slots:
+            return Response(
+                {'error': f'选择的中奖人数({len(winner_ids)})不能超过总中奖名额({total_winner_slots})'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -313,16 +324,30 @@ class LotteryViewSet(viewsets.ModelViewSet):
         # 清除之前的中奖记录（如果有）
         Winner.objects.filter(lottery=lottery).delete()
         
-        # 创建中奖记录
+        # 按照奖品等级依次分配中奖人
         winners = []
-        for user_id in winner_ids:
-            user = TelegramUser.objects.get(id=user_id)
-            winner = Winner.objects.create(
-                lottery=lottery,
-                user=user,
-                prize=lottery.prize_name
-            )
-            winners.append(winner)
+        winner_index = 0
+        
+        for prize in prizes:
+            # 为当前奖品分配中奖人
+            for _ in range(prize.winner_count):
+                if winner_index >= len(winner_ids):
+                    break  # 如果没有更多的中奖人，结束分配
+                
+                user_id = winner_ids[winner_index]
+                user = TelegramUser.objects.get(id=user_id)
+                
+                winner = Winner.objects.create(
+                    lottery=lottery,
+                    prize=prize,
+                    user=user,
+                    prize_name=prize.name  # 向后兼容
+                )
+                winners.append(winner)
+                winner_index += 1
+            
+            if winner_index >= len(winner_ids):
+                break  # 所有选中的人都已分配完毕
         
         # 更新抽奖状态
         lottery.status = 'finished'
@@ -330,13 +355,13 @@ class LotteryViewSet(viewsets.ModelViewSet):
         lottery.save()
         
         # 发送中奖通知
-        winner_users = [TelegramUser.objects.get(id=wid) for wid in winner_ids]
-        lottery._send_winner_notifications(winner_users)
+        winner_data = [(winner.user, winner.prize) for winner in winners]
+        lottery._send_winner_notifications_multi_prize(winner_data)
         
         # 返回结果
         serializer = WinnerSerializer(winners, many=True)
         return Response({
-            'message': '手动指定开奖成功',
+            'message': f'手动指定开奖成功！共{len(winners)}人中奖',
             'winners': serializer.data
         })
     

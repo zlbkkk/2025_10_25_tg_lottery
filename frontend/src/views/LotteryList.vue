@@ -181,7 +181,7 @@
         >
           <template #title>
             <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span>请从参与者中选择中奖人（奖品数量：{{ currentLottery?.prize_count || 0 }}）</span>
+              <span>请选择中奖人（将按奖品等级依次分配：一等奖、二等奖...）</span>
               <span style="color: #409eff;">已选择：{{ selectedWinners.length }} 人</span>
             </div>
           </template>
@@ -226,7 +226,7 @@
             :disabled="selectedWinners.length === 0"
             :loading="drawLoading"
           >
-            确定开奖（{{ selectedWinners.length }}/{{ currentLottery?.prize_count || 0 }}）
+            确定开奖（已选 {{ selectedWinners.length }} 人）
           </el-button>
         </span>
       </template>
@@ -317,19 +317,7 @@ export default {
     },
     // 选择变化时的处理
     handleSelectionChange(selection) {
-      // 限制选择数量不超过奖品数量
-      if (selection.length > this.currentLottery?.prize_count) {
-        this.$message.warning(`最多只能选择 ${this.currentLottery.prize_count} 个中奖人`)
-        // 移除最后选择的
-        this.$nextTick(() => {
-          this.$refs.participantTable.clearSelection()
-          // 重新选择前N个
-          selection.slice(0, this.currentLottery.prize_count).forEach(row => {
-            this.$refs.participantTable.toggleRowSelection(row, true)
-          })
-        })
-        return
-      }
+      // 直接保存选择，后端会验证总名额
       this.selectedWinners = selection
     },
     // 确认手动指定开奖
@@ -339,14 +327,9 @@ export default {
         return
       }
       
-      if (this.selectedWinners.length > this.currentLottery.prize_count) {
-        this.$message.warning(`选择的中奖人数不能超过奖品数量(${this.currentLottery.prize_count})`)
-        return
-      }
-      
       try {
         await this.$confirm(
-          `确定将以下 ${this.selectedWinners.length} 人指定为中奖者吗？\n${this.selectedWinners.map(w => w.display_name).join('、')}`,
+          `确定将以下 ${this.selectedWinners.length} 人指定为中奖者吗？\n将按奖品等级依次分配（一等奖、二等奖...）\n\n${this.selectedWinners.map((w, i) => `${i + 1}. ${w.display_name}`).join('\n')}`,
           '确认手动指定开奖',
           {
             confirmButtonText: '确定',

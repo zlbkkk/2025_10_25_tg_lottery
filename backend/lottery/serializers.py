@@ -85,15 +85,30 @@ class WinnerSerializer(serializers.ModelSerializer):
     user = TelegramUserSerializer(read_only=True)
     prize = PrizeSerializer(read_only=True)
     prize_display_name = serializers.SerializerMethodField()
+    prize_level_text = serializers.SerializerMethodField()
     
     class Meta:
         model = Winner
-        fields = ['id', 'user', 'prize', 'prize_name', 'prize_display_name', 'won_at', 'claimed']
+        fields = ['id', 'user', 'prize', 'prize_name', 'prize_display_name', 'prize_level_text', 'won_at', 'claimed']
         read_only_fields = ['id', 'won_at']
     
     def get_prize_display_name(self, obj):
         """获取显示用的奖品名称（优先使用Prize，否则使用旧的prize_name）"""
         return obj.prize.name if obj.prize else obj.prize_name
+    
+    def get_prize_level_text(self, obj):
+        """获取奖品等级文本"""
+        if not obj.prize:
+            return '-'
+        
+        level_map = {
+            1: '🥇一等奖',
+            2: '🥈二等奖',
+            3: '🥉三等奖',
+            4: '四等奖',
+            5: '五等奖',
+        }
+        return level_map.get(obj.prize.level, f'第{obj.prize.level}等奖')
 
 
 class LotteryDetailSerializer(serializers.ModelSerializer):
