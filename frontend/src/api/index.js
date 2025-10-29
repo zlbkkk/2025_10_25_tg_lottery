@@ -118,6 +118,12 @@ export default {
   drawLottery(id) {
     return api.post(`/lotteries/${id}/draw/`)
   },
+  getParticipants(id) {
+    return api.get(`/lotteries/${id}/participants/`)
+  },
+  manualDrawLottery(id, winner_ids) {
+    return api.post(`/lotteries/${id}/manual_draw/`, { winner_ids })
+  },
   
   // 统计相关
   getStatistics() {

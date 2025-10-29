@@ -231,9 +231,118 @@ class LotteryViewSet(viewsets.ModelViewSet):
             'participation': serializer.data
         })
     
+    @action(detail=True, methods=['get'])
+    def participants(self, request, pk=None):
+        """获取抽奖的参与者列表"""
+        lottery = self.get_object()
+        
+        # 获取所有参与者
+        participations = Participation.objects.filter(lottery=lottery).select_related('user')
+        
+        # 构造参与者数据
+        participants_data = []
+        for participation in participations:
+            participants_data.append({
+                'id': participation.user.id,
+                'telegram_id': participation.user.telegram_id,
+                'username': participation.user.username,
+                'first_name': participation.user.first_name,
+                'last_name': participation.user.last_name,
+                'display_name': participation.user.get_display_name(),
+                'participated_at': participation.participated_at
+            })
+        
+        return Response({
+            'total': len(participants_data),
+            'participants': participants_data
+        })
+    
+    @action(detail=True, methods=['post'])
+    def manual_draw(self, request, pk=None):
+        """手动指定中奖人"""
+        lottery = self.get_object()
+        
+        if lottery.status != 'active':
+            return Response(
+                {'error': '抽奖未进行中'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 检查是否超过结束时间
+        from datetime import datetime
+        now = datetime.now()
+        end_time = lottery.end_time
+        
+        # 兼容旧数据：转换aware datetime为naive
+        if timezone.is_aware(end_time):
+            end_time = timezone.make_naive(end_time)
+        
+        if now > end_time:
+            return Response(
+                {'error': '抽奖已结束，无法手动开奖'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 获取要指定的中奖人ID列表
+        winner_ids = request.data.get('winner_ids', [])
+        if not winner_ids:
+            return Response(
+                {'error': '请选择至少一个中奖人'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 验证选择的人数是否超过奖品数量
+        if len(winner_ids) > lottery.prize_count:
+            return Response(
+                {'error': f'选择的中奖人数({len(winner_ids)})不能超过奖品数量({lottery.prize_count})'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 验证所有ID是否都是该抽奖的参与者
+        participations = Participation.objects.filter(
+            lottery=lottery,
+            user__id__in=winner_ids
+        )
+        
+        if participations.count() != len(winner_ids):
+            return Response(
+                {'error': '选择的用户中包含未参与此抽奖的用户'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 清除之前的中奖记录（如果有）
+        Winner.objects.filter(lottery=lottery).delete()
+        
+        # 创建中奖记录
+        winners = []
+        for user_id in winner_ids:
+            user = TelegramUser.objects.get(id=user_id)
+            winner = Winner.objects.create(
+                lottery=lottery,
+                user=user,
+                prize=lottery.prize_name
+            )
+            winners.append(winner)
+        
+        # 更新抽奖状态
+        lottery.status = 'finished'
+        lottery.manual_drawn = True
+        lottery.save()
+        
+        # 发送中奖通知
+        winner_users = [TelegramUser.objects.get(id=wid) for wid in winner_ids]
+        lottery._send_winner_notifications(winner_users)
+        
+        # 返回结果
+        serializer = WinnerSerializer(winners, many=True)
+        return Response({
+            'message': '手动指定开奖成功',
+            'winners': serializer.data
+        })
+    
     @action(detail=True, methods=['post'])
     def draw(self, request, pk=None):
-        """手动开奖"""
+        """随机开奖"""
         lottery = self.get_object()
         
         if lottery.status != 'active':
@@ -265,7 +374,7 @@ class LotteryViewSet(viewsets.ModelViewSet):
             winners = lottery.winners.all()
             serializer = WinnerSerializer(winners, many=True)
             return Response({
-                'message': '手动开奖成功',
+                'message': '随机开奖成功',
                 'winners': serializer.data
             })
         else:
